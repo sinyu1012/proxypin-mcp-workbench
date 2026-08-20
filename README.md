@@ -12,8 +12,6 @@
 
 ![自动化工作台](docs/images/workbench-overview.png)
 
-![请求与响应双列详情](docs/images/request-response-split.png)
-
 ![Mock 场景合集](docs/images/mock-scenarios.png)
 
 ## 主要能力

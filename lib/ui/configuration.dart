@@ -1,0 +1,278 @@
+/*
+ * Copyright 2023 Hongen Wang All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:proxypin/network/util/logger.dart';
+import 'package:proxypin/utils/platform.dart';
+import 'package:path_provider/path_provider.dart';
+
+/// @author wanghongen
+/// 2024/1/1
+class ColorMapping {
+  static final Map<String, Color> colors = {
+    "Blue": Colors.blue,
+    "Pink": Colors.pink,
+    "Red": Colors.red,
+    "Purple": Colors.deepPurple,
+    "Green": Colors.green,
+    "Teal": Colors.teal,
+    "Cyan": Colors.cyan,
+    "Orange": Colors.orange,
+    "Yellow": Colors.yellow[900]!,
+    "Grey": Colors.grey,
+  };
+
+  static Color getColor(String colorName) {
+    return colors[colorName] ?? Colors.blue;
+  }
+
+  static String getColorName(Color color) {
+    return colors.entries.firstWhere((entry) => entry.value == color).key;
+  }
+}
+
+class ThemeModel {
+  ThemeMode mode;
+  bool useMaterial3;
+  String color = "Pink";
+
+  ThemeModel({this.mode = ThemeMode.system, this.useMaterial3 = true});
+
+  ThemeModel copy({ThemeMode? mode, bool? useMaterial3}) => ThemeModel(
+        mode: mode ?? this.mode,
+        useMaterial3: useMaterial3 ?? this.useMaterial3,
+      );
+
+  Color get themeColor => ColorMapping.colors[color] ?? Colors.blue;
+}
+
+class AppConfiguration {
+  static const String version = "1.2.8";
+
+  ValueNotifier<bool> globalChange = ValueNotifier(false);
+
+  ThemeModel _theme = ThemeModel();
+  Locale? _language;
+
+  //是否显示更新内容公告
+  bool upgradeNoticeV28 = true;
+
+  /// 是否启用画中画
+  ValueNotifier<bool> pipEnabled = ValueNotifier(Platform.isAndroid);
+
+  /// 显示画中画图标
+  ValueNotifier<bool> pipIcon = ValueNotifier(Platform.isAndroid);
+
+  /// header默认展示
+  bool headerExpanded = true;
+
+  /// Headers展示模式: table(逐行) / text(原始文本)
+  String headerViewMode = "table";
+
+  /// 底部导航栏
+  bool bottomNavigation = true;
+
+  /// 内存清理
+  int? memoryCleanupThreshold;
+
+  ///自动已读
+  bool autoReadEnabled = true;
+
+  /// 清空抓包前确认
+  bool clearConfirm = false;
+
+  //桌面window大小
+  Size? windowSize;
+
+  //桌面window位置
+  Offset? windowPosition;
+
+  //左侧面板占比
+  double panelRatio = 0.3;
+
+  /// 关闭窗口时最小化到系统托盘
+  bool? minimizeToTray;
+
+  AppConfiguration._();
+
+  /// 单例
+  static AppConfiguration? _instance;
+
+  static Future<AppConfiguration> get instance async {
+    if (_instance == null) {
+      try {
+        AppConfiguration configuration = AppConfiguration._();
+        await configuration.initConfig();
+        _instance = configuration;
+      } catch (e) {
+        logger.e("load config error: $e");
+        _instance = AppConfiguration._();
+      }
+    }
+    return _instance!;
+  }
+
+  static AppConfiguration? get current => _instance;
+
+  ThemeMode get themeMode => _theme.mode;
+
+  set themeMode(ThemeMode mode) {
+    if (mode == _theme.mode) return;
+    _theme.mode = mode;
+    globalChange.value = !globalChange.value;
+    flushConfig();
+  }
+
+  ///Material3
+  bool get useMaterial3 => _theme.useMaterial3;
+
+  set useMaterial3(bool value) {
+    if (value == useMaterial3) return;
+    _theme.useMaterial3 = value;
+    globalChange.value = !globalChange.value;
+    flushConfig();
+  }
+
+  Color get themeColor => _theme.themeColor;
+
+  set setThemeColor(String colorName) {
+    var color = ColorMapping.colors[colorName];
+    if (color == null || color == themeColor) return;
+
+    _theme.color = colorName;
+    globalChange.value = !globalChange.value;
+    flushConfig();
+  }
+
+  ///language
+  Locale? get language => _language;
+
+  set language(Locale? locale) {
+    if (locale == _language) return;
+    _language = locale;
+    globalChange.value = !globalChange.value;
+    flushConfig();
+  }
+
+  Future<File> get _path async {
+    if (Platforms.isDesktop()) {
+      var userHome = Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
+      return File('$userHome${Platform.pathSeparator}.proxypin${Platform.pathSeparator}ui_config.json');
+    }
+
+    final directory = await getApplicationSupportDirectory();
+    var file = File('${directory.path}${Platform.pathSeparator}ui_config.json');
+    if (!await file.exists()) {
+      await file.create();
+    }
+    return file;
+  }
+
+  /// 初始化配置
+  Future<void> initConfig() async {
+    // 读取配置文件
+    var file = await _path;
+    logger.d(file);
+    var exits = await file.exists();
+    if (!exits) {
+      return;
+    }
+    var json = await file.readAsString();
+    if (json.isEmpty) {
+      return;
+    }
+
+    try {
+      Map<String, dynamic> config = jsonDecode(json);
+      var mode =
+          ThemeMode.values.firstWhere((element) => element.name == config['mode'], orElse: () => ThemeMode.system);
+      _theme = ThemeModel(mode: mode, useMaterial3: config['useMaterial3'] ?? true);
+      _theme.color = config['themeColor'] ?? "Blue";
+
+      upgradeNoticeV28 = config['upgradeNoticeV28'] ?? true;
+      _language = config['language'] == null
+          ? null
+          : Locale.fromSubtags(languageCode: config['language'], scriptCode: config['languageScript']);
+      pipEnabled.value = config['pipEnabled'] ?? true;
+      pipIcon.value = config['pipIcon'] ?? false;
+      headerExpanded = config['headerExpanded'] ?? true;
+      headerViewMode = config['headerViewMode'] ?? "table";
+      bottomNavigation = config['bottomNavigation'] ?? true;
+      memoryCleanupThreshold = config['memoryCleanupThreshold'];
+      autoReadEnabled = config['autoReadEnabled'] ?? true;
+      clearConfirm = config['clearConfirm'] ?? false;
+
+      windowSize =
+          config['windowSize'] == null ? null : Size(config['windowSize']['width'], config['windowSize']['height']);
+      windowPosition = config['windowPosition'] == null
+          ? null
+          : Offset(config['windowPosition']['dx'], config['windowPosition']['dy']);
+      if (config['panelRatio'] != null) {
+        panelRatio = config['panelRatio'];
+      }
+      minimizeToTray = config['minimizeToTray'];
+    } catch (e) {
+      logger.e(e);
+    }
+  }
+
+  /// 是否正在写入
+  bool _isWriting = false;
+
+  /// 刷新配置文件
+  Future<void> flushConfig() async {
+    if (_isWriting) return;
+    _isWriting = true;
+
+    var file = await _path;
+    var exists = await file.exists();
+    if (!exists) {
+      file = await file.create(recursive: true);
+    }
+
+    var json = jsonEncode(toJson());
+    await file.writeAsString(json);
+    _isWriting = false;
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'mode': _theme.mode.name,
+      'themeColor': _theme.color,
+      'useMaterial3': _theme.useMaterial3,
+      'upgradeNoticeV28': upgradeNoticeV28,
+      "language": _language?.languageCode,
+      "languageScript": _language?.scriptCode,
+      "headerExpanded": headerExpanded,
+      "headerViewMode": headerViewMode,
+      "autoReadEnabled": autoReadEnabled,
+      "clearConfirm": clearConfirm,
+      if (memoryCleanupThreshold != null) 'memoryCleanupThreshold': memoryCleanupThreshold,
+      if (Platforms.isMobile()) 'pipEnabled': pipEnabled.value,
+      if (Platforms.isMobile()) 'pipIcon': pipIcon.value ? true : null,
+      if (Platforms.isMobile()) 'bottomNavigation': bottomNavigation,
+      if (Platforms.isDesktop())
+        "windowSize": windowSize == null ? null : {"width": windowSize?.width, "height": windowSize?.height},
+      if (Platforms.isDesktop())
+        "windowPosition": windowPosition == null ? null : {"dx": windowPosition?.dx, "dy": windowPosition?.dy},
+      if (Platforms.isDesktop()) 'panelRatio': panelRatio,
+      if (Platforms.isDesktop()) 'minimizeToTray': minimizeToTray,
+    };
+  }
+}

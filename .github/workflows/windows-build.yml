@@ -1,0 +1,63 @@
+name: CI — Windows Build (branch only)
+
+# 在公开仓库 main 分支推送或手动触发时执行
+# tag 触发的多平台发布已迁移至 release.yml
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.2'
+          channel: stable
+          cache: true
+
+      - name: Flutter Version
+        run: flutter --version
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Generate Localization
+        run: flutter gen-l10n
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      - name: Read App Version
+        shell: pwsh
+        run: |
+          $raw = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(.+)$').Matches[0].Groups[1].Value.Trim()
+          $version = $raw.Split('+')[0]
+          "APP_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Package Artifact
+        shell: pwsh
+        run: |
+          $artifactName = "proxypin-mcp-workbench-windows-$env:APP_VERSION"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "build/windows/x64/runner/Release/*" -DestinationPath "dist/$artifactName.zip" -Force
+          "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_ENV
+          "ARTIFACT_PATH=dist/$artifactName.zip" >> $env:GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error

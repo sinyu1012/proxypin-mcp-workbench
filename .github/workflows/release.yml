@@ -1,0 +1,111 @@
+name: Windows Release
+
+# 触发：推送 v* tag 或手动触发
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # Job 1: Windows — zip 压缩包 + Inno Setup 安装包(.exe)
+  # ─────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.2'
+          channel: stable
+          cache: true
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Generate Localization
+        run: flutter gen-l10n
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      # 读取版本号，去掉 +buildNumber 部分（如 1.2.6+29 → 1.2.6）
+      - name: Read App Version
+        id: version
+        shell: pwsh
+        run: |
+          $raw = (Select-String -Path pubspec.yaml -Pattern '^version:\s*(.+)$').Matches[0].Groups[1].Value.Trim()
+          $version = $raw.Split('+')[0]
+          "app_version=$version"  >> $env:GITHUB_OUTPUT
+          "APP_VERSION=$version"  >> $env:GITHUB_ENV
+
+      # ── 产物 1: zip 压缩包 ──
+      - name: Package Windows Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive `
+            -Path "build\windows\x64\runner\Release\*" `
+            -DestinationPath "dist\proxypin-mcp-workbench-windows-$env:APP_VERSION.zip" `
+            -Force
+
+      # ── 产物 2: Inno Setup 安装包（windows-latest 已预装 Inno Setup 6） ──
+      - name: Build Inno Setup Installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=$env:APP_VERSION" "installers\windows\setup.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload Windows Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: dist/proxypin-mcp-workbench-windows-${{ env.APP_VERSION }}.zip
+          if-no-files-found: error
+
+      - name: Upload Windows Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/proxypin-mcp-workbench-windows-${{ env.APP_VERSION }}-setup.exe
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────
+  # Job 2: 发布 GitHub Release（仅 tag 触发时执行）
+  # ─────────────────────────────────────────────────────────────
+  publish-release:
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List Release Files
+        run: ls -lh artifacts/
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

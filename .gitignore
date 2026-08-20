@@ -1,0 +1,84 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+Podfile.lock
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+l10n_errors.txt
+pubspec.lock
+/dist/
+.ace-tool/
+
+test/test_minimax_api.py
+
+.trae/workflow/tasks_simple/26-06-24-19-10-00/
+
+test/
+!test/
+test/*
+!test/network_panel_split_layout_test.dart
+!test/capture_plan_test.dart
+!test/har_archive_recovery_test.dart
+
+# Local capture/runtime data — never publish credentials or personal traffic.
+*.har
+*.pcap
+*.pcapng
+*.mobileconfig
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+captures/
+exports/
+local-data/
+capture_plans.json
+capture_projects.json
+request_rewrite.json
+proxypin_debug.log
+
+# Local visual QA sources are not part of the public documentation.
+design-qa.md
+design-qa-artifacts/

@@ -1,0 +1,404 @@
+/*
+ * Copyright 2023 Hongen Wang All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import 'dart:io';
+
+import 'package:proxypin/network/channel/host_port.dart';
+import 'package:proxypin/network/util/logger.dart';
+import 'package:proxypin/utils/ip.dart';
+import 'package:proxypin/utils/lang.dart';
+import 'package:proxy_manager/proxy_manager.dart';
+
+/// @author wanghongen
+/// 2023/7/26
+class SystemProxy {
+  static SystemProxy? _instance;
+
+  ///单例
+  static SystemProxy get instance {
+    if (_instance == null) {
+      if (Platform.isMacOS) {
+        _instance = MacSystemProxy();
+      } else if (Platform.isWindows) {
+        _instance = WindowsSystemProxy();
+      } else if (Platform.isLinux) {
+        _instance = LinuxSystemProxy();
+      } else {
+        _instance = SystemProxy();
+      }
+    }
+    return _instance!;
+  }
+
+  ///获取代理忽略地址
+  static String get proxyPassDomains {
+    if (Platform.isMacOS) {
+      return '192.168.0.0/16;10.0.0.0/8;172.16.0.0/12;127.0.0.1;localhost;*.local;timestamp.apple.com';
+    }
+    if (Platform.isWindows) {
+      return '192.168.0.*;10.0.0.*;172.16.0.*;127.0.0.1;localhost;*.local;<local>';
+    }
+
+    if (Platform.isAndroid) {
+      return '192.168.0.0/16;10.0.0.0/8;172.16.0.0/12;127.0.0.1;localhost';
+    }
+    if (Platform.isIOS) {
+      return '192.168.0.0/16;10.0.0.0/8;172.16.0.0/12;127.0.0.1;localhost;*.local;timestamp.apple.com';
+    }
+
+    return '';
+  }
+
+  ///获取系统代理
+  static Future<ProxyInfo?> getSystemProxy(ProxyTypes types) async {
+    return instance._getSystemProxy(types);
+  }
+
+  ///设置系统代理
+  static Future<void> setSystemProxy(int port, bool sslSetting, String proxyPassDomains) async {
+    await instance._setSystemProxy(port, sslSetting, proxyPassDomains);
+  }
+
+  ///设置Https代理启用状态
+  static void setSslProxyEnable(bool proxyEnable, port) {
+    instance._setSslProxyEnable(proxyEnable, port);
+  }
+
+  /// 设置系统代理
+  /// @param sslSetting 是否设置https代理只在mac中有效
+  static Future<void> setSystemProxyEnable(int port, bool enable, bool sslSetting,
+      {required String passDomains}) async {
+    //启用系统代理
+    if (enable) {
+      await setSystemProxy(port, sslSetting, passDomains);
+      return;
+    }
+
+    await instance._setProxyEnable(enable, sslSetting);
+  }
+
+  ///设置代理忽略地址
+  static Future<void> setProxyPassDomains(String proxyPassDomains) async {
+    instance._setProxyPassDomains(proxyPassDomains);
+  }
+
+  //子类抽象方法
+
+  ///获取系统代理
+  Future<ProxyInfo?> _getSystemProxy(ProxyTypes types) async {
+    return null;
+  }
+
+  ///设置系统代理
+  Future<void> _setSystemProxy(int port, bool sslSetting, String proxyPassDomains) async {
+    ProxyManager manager = ProxyManager();
+    await manager.setAsSystemProxy(sslSetting ? ProxyTypes.https : ProxyTypes.http, "127.0.0.1", port);
+    setProxyPassDomains(proxyPassDomains);
+  }
+
+  ///设置代理是否启用
+  Future<void> _setProxyEnable(bool proxyEnable, bool sslSetting) async {
+    ProxyManager manager = ProxyManager();
+    await manager.cleanSystemProxy();
+  }
+
+  ///设置Https代理启用状态
+  Future<bool> _setSslProxyEnable(bool proxyEnable, int port) async {
+    return false;
+  }
+
+  ///设置代理忽略地址
+  Future<void> _setProxyPassDomains(String proxyPassDomains) async {}
+}
+
+class MacSystemProxy implements SystemProxy {
+  static String? _hardwarePort;
+
+  // Helper to safely quote a string for sh (single-quote and escape any internal single quotes)
+  static String _shellQuote(String s) {
+    // Replace ' with '\'' which is the safe way to include single quotes inside single-quoted strings in shell
+    return "'${s.replaceAll("'", "'\\''")}'";
+  }
+
+  ///获取系统代理
+  @override
+  Future<ProxyInfo?> _getSystemProxy(ProxyTypes proxyTypes) async {
+    _hardwarePort = _hardwarePort ?? await hardwarePort();
+
+    // ensure we have a name
+    if (_hardwarePort == null || _hardwarePort!.isEmpty) {
+      logger.e('hardwarePort is empty, cannot get system proxy');
+      return null;
+    }
+
+    final quotedName = _shellQuote(_hardwarePort!);
+
+    var result = await Process.run('bash', [
+      '-c',
+      'networksetup ${proxyTypes == ProxyTypes.http ? '-getwebproxy' : '-getsecurewebproxy'} $quotedName'
+    ]).then((results) => results.stdout.toString().split('\n'));
+
+    // defensive parsing: find lines safely
+    String enabledLine = result.firstWhere((item) => item.contains('Enabled'), orElse: () => '');
+    if (enabledLine.isEmpty) {
+      logger.e('Failed to parse Enabled line from networksetup output: ${result.join('\n')}');
+      return null;
+    }
+
+    var proxyEnableParts = enabledLine.trim().split(RegExp(r":\s*"));
+    var proxyEnable = proxyEnableParts.length > 1 ? proxyEnableParts[1] : 'No';
+    if (proxyEnable == 'No') {
+      return null;
+    }
+
+    String serverLine = result.firstWhere((item) => item.contains('Server'), orElse: () => '');
+    String portLine = result.firstWhere((item) => item.contains('Port'), orElse: () => '');
+    if (serverLine.isEmpty || portLine.isEmpty) {
+      logger.e('Failed to parse Server/Port from networksetup output: ${result.join('\n')}');
+      return null;
+    }
+
+    var proxyServer = serverLine.trim().split(RegExp(r":\s*"))[1];
+    var proxyPort = portLine.trim().split(RegExp(r":\s*"))[1];
+    if (proxyEnable == 'Yes' && proxyServer.isNotEmpty) {
+      return ProxyInfo.of(proxyServer, int.parse(proxyPort));
+    }
+    return null;
+  }
+
+  ///mac设置代理地址
+  @override
+  Future<bool> _setSystemProxy(int port, bool sslSetting, String proxyPassDomains) async {
+    _hardwarePort = _hardwarePort ?? await hardwarePort();
+    if (_hardwarePort == null || _hardwarePort!.isEmpty) {
+      logger.e('hardwarePort is empty, cannot set system proxy');
+      return false;
+    }
+
+    final quotedName = _shellQuote(_hardwarePort!);
+
+    List<String> commands = [
+      'networksetup -setwebproxy $quotedName 127.0.0.1 $port',
+      sslSetting == true ? 'networksetup -setsecurewebproxy $quotedName 127.0.0.1 $port' : '',
+      'networksetup -setproxybypassdomains $quotedName ${proxyPassDomains.replaceAll(";", " ")}',
+      'networksetup -setsocksfirewallproxystate $quotedName off',
+    ];
+    var results = await Process.run('bash', ['-c', _concatCommands(commands)]);
+    logger.d('set proxyServer, name: $_hardwarePort, exitCode: ${results.exitCode}, stdout: ${results.stdout}');
+    bool success = results.exitCode == 0;
+    if (!success) {
+      logger.e('setSystemProxy failed, stderr: ${results.stderr}');
+      return setProxyWithAuth(commands);
+    }
+    return success;
+  }
+
+  ///设置Https代理
+  @override
+  Future<bool> _setSslProxyEnable(bool proxyEnable, port) async {
+    var name = _hardwarePort ?? await hardwarePort();
+    if (name.isEmpty) {
+      logger.e('hardwarePort is empty, cannot set ssl proxy state');
+      return false;
+    }
+    final quotedName = _shellQuote(name);
+
+    List<String> commands = [
+      proxyEnable
+          ? 'networksetup -setsecurewebproxy $quotedName 127.0.0.1 $port'
+          : 'networksetup -setsecurewebproxystate $quotedName off'
+    ];
+
+    var results = await Process.run('bash', ['-c', _concatCommands(commands)]);
+    bool success = results.exitCode == 0;
+    if (!success) {
+      logger.e('setSystemProxy failed, stderr: ${results.stderr}');
+      return setProxyWithAuth(commands);
+    }
+    return success;
+  }
+
+  ///mac获取当前网络名称
+  static Future<String> hardwarePort() async {
+    var name = await networkName();
+    // Use a safer pipeline that avoids embedding awk's $2 (which complicates Dart string quoting).
+    // This command finds the Device line, takes the following Hardware Port line, and extracts the part after ':'
+    var cmd = 'networksetup -listnetworkserviceorder | grep "Device: ${name}" -A 1 | grep "Hardware Port" | cut -d: -f2 | sed -n \'1p\'';
+    var results = await Process.run('bash', ['-c', cmd]);
+    var out = results.stdout.toString().trim();
+    if (out.isEmpty) return '';
+    // split on newlines or commas and take the first non-empty token
+    var parts = out.split(RegExp(r"[\r\n,]+"));
+    return parts.first.trim();
+  }
+
+  ///设置代理忽略地址
+  @override
+  Future<void> _setProxyPassDomains(String proxyPassDomains) async {
+    _hardwarePort ??= await hardwarePort();
+    if (_hardwarePort == null || _hardwarePort!.isEmpty) {
+      logger.e('hardwarePort is empty, cannot set proxy bypass domains');
+      return;
+    }
+    final quotedName = _shellQuote(_hardwarePort!);
+    var results = await Process.run(
+        'bash', ['-c', 'networksetup -setproxybypassdomains $quotedName ${proxyPassDomains.replaceAll(";", " ")}']);
+    logger.d('set proxyPassDomains, name: $_hardwarePort, exitCode: ${results.exitCode}, stdout: ${results.stdout}');
+  }
+
+  ///mac设置代理是否启用
+  @override
+  Future<void> _setProxyEnable(bool proxyEnable, bool sslSetting) async {
+    var proxyMode = proxyEnable ? 'on' : 'off';
+    _hardwarePort ??= await hardwarePort();
+    if (_hardwarePort == null || _hardwarePort!.isEmpty) {
+      logger.e('hardwarePort is empty, cannot set proxy enable state');
+      return;
+    }
+    logger.d('set proxyEnable: $proxyEnable, name: $_hardwarePort');
+    final quotedName = _shellQuote(_hardwarePort!);
+    List<String> commands = [
+      'networksetup -setwebproxystate $quotedName $proxyMode',
+      sslSetting ? 'networksetup -setsecurewebproxystate $quotedName $proxyMode' : ''
+    ];
+
+    var results = await Process.run('bash', ['-c', _concatCommands(commands)]);
+
+    if (results.exitCode != 0) {
+      logger.e('setProxyEnable failed, stderr: ${results.stderr}');
+      await setProxyWithAuth(commands);
+    }
+  }
+
+  Future<bool> setProxyWithAuth(List<String> commands) async {
+    // 使用 quoted form of 确保 shell 指令被 AppleScript 正确转义
+    String script = 'do shell script "${commands.join('; ')}" with administrator privileges';
+    try {
+      final result = await Process.run('osascript', ['-e', script]);
+      bool success = result.exitCode == 0;
+      if (!success) {
+        logger.e("操作失败或用户取消: ${result.stderr}");
+      }
+      return success;
+    } catch (e) {
+      logger.e("执行 AppleScript 出错: $e");
+      return false;
+    }
+  }
+
+  static String _concatCommands(List<String> commands) {
+    return commands.where((element) => element.isNotEmpty).join(' && ');
+  }
+}
+
+class WindowsSystemProxy extends SystemProxy {
+  ///设置windows代理是否启用
+  @override
+  Future<void> _setProxyEnable(bool proxyEnable, bool sslSetting) async {
+    await _internetSettings('add', ['ProxyEnable', '/t', 'REG_DWORD', '/f', '/d', proxyEnable ? '1' : '0']);
+  }
+
+  ///获取系统代理
+  @override
+  Future<ProxyInfo?> _getSystemProxy(ProxyTypes types) async {
+    var results = await _internetSettings('query', ['ProxyEnable']);
+
+    var proxyEnableLine = results.split('\r\n').where((item) => item.contains('ProxyEnable')).first.trim();
+    if (proxyEnableLine.substring(proxyEnableLine.length - 1) != '1') {
+      return null;
+    }
+
+    return _internetSettings('query', ['ProxyServer']).then((results) {
+      var proxyServerLine = results.split('\r\n').where((item) => item.contains('ProxyServer')).firstOrNull;
+      var proxyServerLineSplits = proxyServerLine?.split(RegExp(r"\s+"));
+
+      if (proxyServerLineSplits == null || proxyServerLineSplits.length < 2) {
+        return null;
+      }
+
+      var proxyLine = proxyServerLineSplits[proxyServerLineSplits.length - 1];
+      if (proxyLine.startsWith("http://") || proxyLine.startsWith("https:///")) {
+        proxyLine = proxyLine.replaceFirst("http://", "").replaceFirst("https:///", "");
+      }
+
+      var proxyServer = proxyLine.split(":")[0];
+      var proxyPort = proxyLine.split(":")[1];
+      logger.d("$proxyServer:$proxyPort");
+      return ProxyInfo.of(proxyServer, int.parse(proxyPort));
+    }).catchError((e) {
+      logger.e('getSystemProxy error', error: e, stackTrace: StackTrace.current);
+      return null;
+    });
+  }
+
+  ///设置代理忽略地址
+  @override
+  Future<void> _setProxyPassDomains(String proxyPassDomains) async {
+    var results = await _internetSettings('add', ['ProxyOverride', '/t', 'REG_SZ', '/d', proxyPassDomains, '/f']);
+    logger.i('set proxyPassDomains, stdout: $results');
+  }
+
+  static Future<String> _internetSettings(String cmd, List<String> args) async {
+    return Process.run('reg', [
+      cmd,
+      'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings',
+      '/v',
+      ...args,
+    ]).then((results) => results.stdout.toString());
+  }
+}
+
+class LinuxSystemProxy extends SystemProxy {
+  @override
+  Future<void> _setSystemProxy(int port, bool sslSetting, String proxyPassDomains) async {
+    ProxyManager manager = ProxyManager();
+
+    await manager.setAsSystemProxy(ProxyTypes.http, "127.0.0.1", port);
+    if (sslSetting) await manager.setAsSystemProxy(ProxyTypes.https, "127.0.0.1", port);
+
+    SystemProxy.setProxyPassDomains(proxyPassDomains);
+  }
+
+  ///linux 获取代理
+  @override
+  Future<ProxyInfo?> _getSystemProxy(ProxyTypes types) async {
+    var mode = await Process.run("gsettings", ["get", "org.gnome.system.proxy", "mode"])
+        .then((value) => value.stdout.toString().trim());
+    if (mode.contains("manual")) {
+      var hostFuture = Process.run("gsettings", ["get", "org.gnome.system.proxy.${types.name}", "host"])
+          .then((value) => value.stdout.toString().trim());
+      var portFuture = Process.run("gsettings", ["get", "org.gnome.system.proxy.${types.name}", "port"])
+          .then((value) => value.stdout.toString().trim());
+
+      return Future.wait([hostFuture, portFuture]).then((value) {
+        var host = Strings.trimWrap(value[0], "'");
+        var port = Strings.trimWrap(value[1], "'");
+        if (host.isNotEmpty && port.isNotEmpty) {
+          return ProxyInfo.of(host, int.parse(port));
+        }
+        return null;
+      });
+    }
+    return null;
+  }
+}
+
+void main() async {
+  // single instance
+  ProxyManager manager = ProxyManager();
+// set a http proxy
+  await manager.setAsSystemProxy(ProxyTypes.http, "127.0.0.1", 1087);
+}

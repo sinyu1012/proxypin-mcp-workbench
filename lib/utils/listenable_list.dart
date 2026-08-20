@@ -1,0 +1,189 @@
+/*
+ * Copyright 2023 Hongen Wang
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+abstract class ListenerListEvent<T> {
+  /// 监听的源
+  void sourceAware(List<T> source) {}
+
+  void onAdd(T item);
+
+  /// 批量新增只触发一次上层刷新；默认逐项转发以保持兼容。
+  void onBatchAdd(List<T> items) {
+    for (final item in items) {
+      onAdd(item);
+    }
+  }
+
+  void onRemove(T item);
+
+  void onUpdate(T item) {}
+
+  void onBatchRemove(List<T> items);
+
+  void clear(List<T> items);
+}
+
+class OnchangeListEvent<T> extends ListenerListEvent<T> {
+  final Function onChange;
+
+  OnchangeListEvent(this.onChange);
+
+  @override
+  void onAdd(T item) => onChange.call();
+
+  @override
+  void onBatchAdd(List<T> items) => onChange.call();
+
+  @override
+  void onRemove(T item) => onChange.call();
+
+  @override
+  void onUpdate(T item) => onChange.call();
+
+  @override
+  void onBatchRemove(List<T> items) => onChange.call();
+
+  @override
+  void clear(List<T> items) => onChange.call();
+}
+
+/// 可监听list
+/// @author wanghongen
+/// 2024/01/30
+class ListenableList<T> extends Iterable<T> {
+  List<T> source = [];
+  final List<ListenerListEvent<T>> _listeners = [];
+
+  ListenableList([List<T>? source]) {
+    if (source != null) this.source = source;
+  }
+
+  void addListener(ListenerListEvent<T> listener) {
+    if (_listeners.contains(listener)) return;
+    listener.sourceAware(source);
+    _listeners.add(listener);
+  }
+
+  void removeListener(ListenerListEvent<T> listener) {
+    _listeners.remove(listener);
+  }
+
+  @override
+  int get length => source.length;
+
+  @override
+  bool get isEmpty => source.isEmpty;
+
+  int indexOf(T item) => source.indexOf(item);
+
+  @override
+  T elementAt(int index) => source[index];
+
+  List<T> sublist(int start, [int? end]) {
+    return source.sublist(start, end);
+  }
+
+  void addAll(Iterable<T> items) {
+    final batch = items.toList(growable: false);
+    if (batch.isEmpty) return;
+    source.addAll(batch);
+    for (var element in _listeners) {
+      element.onBatchAdd(batch);
+    }
+  }
+
+  List<T> removeRange(int start, int end) {
+    final normalizedEnd = end > source.length ? source.length : end;
+    if (start < 0 || start >= normalizedEnd) {
+      return <T>[];
+    }
+
+    final removed = source.sublist(start, normalizedEnd);
+    source.removeRange(start, normalizedEnd);
+    for (var element in _listeners) {
+      element.clear(removed);
+    }
+    return removed;
+  }
+
+  void update(int index, T item) {
+    source[index] = item;
+    for (var element in _listeners) {
+      element.onUpdate(item);
+    }
+  }
+
+  void add(T item) {
+    source.add(item);
+    for (var element in _listeners) {
+      element.onAdd(item);
+    }
+  }
+
+  bool remove(T item) {
+    var remove = source.remove(item);
+    if (remove) {
+      for (var element in _listeners) {
+        element.onRemove(item);
+      }
+    }
+    return remove;
+  }
+
+  T removeAt(int index) {
+    var item = source.removeAt(index);
+    if (item != null) {
+      for (var element in _listeners) {
+        element.onRemove(item);
+      }
+    }
+    return item;
+  }
+
+  void clear() {
+    if (source.isEmpty) {
+      // 即使为空也调用 listener.clear()，让订阅者（MCP 同步等）有机会重置自身状态
+      for (var element in _listeners) {
+        element.clear(<T>[]);
+      }
+      return;
+    }
+    final removed = List<T>.from(source);
+    source.clear();
+    // 先广播批量移除，让 UI 能在 source 已被清空前收到事件
+    for (var element in _listeners) {
+      element.onBatchRemove(removed);
+    }
+  }
+
+  void removeWhere(bool Function(T element) test) {
+    var list = <T>[];
+    source.removeWhere((it) {
+      if (test.call(it)) {
+        list.add(it);
+        return true;
+      }
+      return false;
+    });
+    if (list.isEmpty) return;
+
+    for (var element in _listeners) {
+      element.onBatchRemove(list);
+    }
+  }
+
+  @override
+  Iterator<T> get iterator => source.iterator;
+}

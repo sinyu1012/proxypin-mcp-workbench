@@ -1,0 +1,4 @@
+interface:
+  display_name: "ProxyPin 抓包工作流"
+  short_description: "通过 ProxyPin 与 MCP 完成手机抓包、接口分析、数据导出和 Mock 管理"
+  default_prompt: "使用 ProxyPin 检查当前抓包状态，分析目标 App 请求，并按我的目标安全导出或配置 Mock。"

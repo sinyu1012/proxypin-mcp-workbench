@@ -1,0 +1,17 @@
+ProxyPin MCP Workbench
+Copyright 2026 ProxyPin MCP Workbench contributors
+
+This product includes software developed by the ProxyPin project:
+https://github.com/wanghongenpin/proxypin
+
+It also includes work derived from:
+https://github.com/SuxyEE/proxypin-mcp
+https://github.com/ouy160/proxypin-mcp-model
+
+ProxyPin MCP Workbench adds desktop workflow, split request/response inspection,
+capture project archiving, reusable capture plans, API asset organization,
+data export, Mock collections, and MCP-assisted automation.
+
+All upstream copyright, patent, trademark, and attribution notices remain in
+effect. ProxyPin MCP Workbench is an unofficial derivative and is not endorsed
+by the upstream projects or their maintainers.

@@ -14,6 +14,8 @@
 
 ![请求与响应双列详情](docs/images/request-response-split.png)
 
+![Mock 场景合集](docs/images/mock-scenarios.png)
+
 ## 主要能力
 
 - **自动化工作台**：统一管理抓包项目、API 资产、数据导出和 Mock 场景。

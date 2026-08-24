@@ -12,8 +12,6 @@
 
 ![自动化工作台](docs/images/workbench-overview.png)
 
-![请求与响应双列详情](docs/images/request-response-split.png)
-
 本机抓包会将 macOS 流量从普通设备抓包中单独归拢，并支持按来源应用筛选。
 
 ![本机抓包与应用筛选](docs/images/local-capture-overview.png)

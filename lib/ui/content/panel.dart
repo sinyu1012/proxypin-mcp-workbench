@@ -586,6 +586,8 @@ class General extends StatelessWidget {
       RowWidget("Remote Address",
           '${response?.remoteHost ?? ''}${response?.remotePort == null ? '' : ':${response?.remotePort}'}'),
       const SizedBox(height: 15),
+      RowWidget("Source Client", request.sourceIp ?? "Unknown"),
+      const SizedBox(height: 15),
       RowWidget("Request Time", request.requestTime.formatMillisecond()),
       const SizedBox(height: 15),
       RowWidget("Duration", response?.costTime()),

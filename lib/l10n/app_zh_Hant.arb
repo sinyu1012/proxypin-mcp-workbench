@@ -2,6 +2,7 @@
   "breakpoint": "斷點",
   "breakpointRule": "斷點規則",
   "requests": "抓包",
+  "localCapture": "本機抓包",
   "favorites": "收藏",
   "history": "歷史",
   "toolbox": "工具箱",

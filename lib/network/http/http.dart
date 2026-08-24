@@ -17,6 +17,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:proxypin/network/util/source_address.dart';
 import 'package:proxypin/network/channel/host_port.dart';
 import 'package:proxypin/network/http/content_type.dart';
 import 'package:proxypin/network/http/websocket.dart';
@@ -182,18 +183,18 @@ abstract class HttpMessage {
 
   // SSE/WebSocket 消息列表，使用 ValueNotifier 以支持流式更新
   final ValueNotifier<List<WebSocketFrame>> messagesNotifier = ValueNotifier<List<WebSocketFrame>>([]);
-  
+
   List<WebSocketFrame> get messages => messagesNotifier.value;
-  
+
   set messages(List<WebSocketFrame> value) {
     messagesNotifier.value = value;
   }
-  
+
   // 供外部添加消息，会自动通知监听者
   void addMessage(WebSocketFrame frame) {
     messagesNotifier.value = [...messagesNotifier.value, frame];
   }
-  
+
   // 批量添加消息，只触发一次通知
   void addMessages(List<WebSocketFrame> frames) {
     if (frames.isEmpty) return;
@@ -211,6 +212,15 @@ class HttpRequest extends HttpMessage {
   HttpResponse? response;
   Map<String, dynamic> attributes = {};
   ProcessInfo? processInfo;
+  String? _sourceIp;
+
+  /// The IP address of the client socket that sent this request to ProxyPin.
+  /// It is intentionally derived from the socket instead of forwarding headers.
+  String? get sourceIp => _sourceIp;
+
+  set sourceIp(String? value) => _sourceIp = normalizeSourceAddress(value);
+
+  String get sourceKey => sourceIp ?? '';
 
   String get uri => _uri;
 
@@ -288,6 +298,7 @@ class HttpRequest extends HttpMessage {
     request.streamId = streamId;
     request.body = body;
     request.messages = messages;
+    request.sourceIp = sourceIp;
     return request;
   }
 
@@ -303,6 +314,7 @@ class HttpRequest extends HttpMessage {
       'headers': headers.toJson(),
       'body': body == null ? null : String.fromCharCodes(body!),
       'requestTime': requestTime.millisecondsSinceEpoch,
+      'sourceIp': sourceIp,
       'messages': messages.map((e) => e.toJson()).toList(),
     };
   }
@@ -314,6 +326,7 @@ class HttpRequest extends HttpMessage {
     request.requestId = json['_id'] ?? request.requestId;
     request.headers.addAll(HttpHeaders.fromJson(json['headers']));
     request.body = json['body']?.toString().codeUnits;
+    request.sourceIp = json['sourceIp']?.toString();
     if (json['requestTime'] != null) {
       request.requestTime = DateTime.fromMillisecondsSinceEpoch(json['requestTime']);
     }
@@ -378,7 +391,7 @@ class HttpResponse extends HttpMessage {
     }
     if (json['messages'] is List) {
       httpResponse.messages = (json['messages'] as List)
-          .where((e) => e is Map)
+          .whereType<Map>()
           .map((e) => WebSocketFrame.fromJson(Map<String, dynamic>.from(e)))
           .toList();
     }

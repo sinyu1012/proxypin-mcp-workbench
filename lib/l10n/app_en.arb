@@ -3,6 +3,7 @@
   "breakpointRule": "Breakpoint Rule",
   "name": "Name",
   "requests": "Requests",
+  "localCapture": "Local Capture",
   "favorites": "Favorites",
   "history": "History",
   "toolbox": "Toolbox",
@@ -35,6 +36,10 @@
   "connectRemote": "Connect Remote",
   "remoteDevice": "Remote Device",
   "remoteDeviceList": "Remote Device List",
+  "allSourceDevices": "All devices",
+  "unknownSourceDevice": "Unknown source",
+  "allApplications": "All apps",
+  "unknownApplication": "Unknown app",
   "myQRCode": "My QR Code",
 
   "theme": "Theme",
@@ -410,5 +415,26 @@
   "mcpToolCompareDesc": "Compare differences between two requests",
   "mcpStartSuccess": "MCP Server started on port {port}",
   "mcpStopSuccess": "MCP Server stopped",
-  "mcpInvalidPort": "Invalid port number"
+  "mcpInvalidPort": "Invalid port number",
+  "firstHopProxyMode": "Proxyman-style First Hop",
+  "firstHopProxyModeDescription": "Requires System Proxy and may request administrator authorization on first use. It temporarily routes macOS HTTP/HTTPS through ProxyPin, restores on normal exit, and never modifies Surge; reopen ProxyPin to recover after a force quit",
+  "firstHopUpstreamLocked": "The upstream is locked while first-hop is active. Restore the system proxy before changing it.",
+  "chainSystemProxy": "Use Current Proxy as Single Upstream",
+  "chainSystemProxyDescription": "Builds ProxyPin → current HTTP proxy when taking ownership; no polling and no Surge configuration changes",
+  "systemProxyOverridden": "ProxyPin identified {endpoint} as its single upstream, but that network service still owns the effective macOS route. To avoid outages and proxy loops, ProxyPin will not compete for it; only requests explicitly sent through ProxyPin will be captured.",
+  "@systemProxyOverridden": {
+    "placeholders": {
+      "endpoint": {
+        "type": "String"
+      }
+    }
+  },
+  "externalProxyLoopError": "The upstream proxy cannot point back to ProxyPin port {localPort}.",
+  "@externalProxyLoopError": {
+    "placeholders": {
+      "localPort": {
+        "type": "int"
+      }
+    }
+  }
 }

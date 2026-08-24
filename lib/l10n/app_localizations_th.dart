@@ -21,6 +21,9 @@ class AppLocalizationsTh extends AppLocalizations {
   String get requests => 'จับแพ็กเก็ต';
 
   @override
+  String get localCapture => 'จับแพ็กเก็ตเครื่องนี้';
+
+  @override
   String get favorites => 'รายการโปรด';
 
   @override
@@ -112,6 +115,18 @@ class AppLocalizationsTh extends AppLocalizations {
 
   @override
   String get remoteDeviceList => 'รายการอุปกรณ์ระยะไกล';
+
+  @override
+  String get allSourceDevices => 'All devices';
+
+  @override
+  String get unknownSourceDevice => 'Unknown source';
+
+  @override
+  String get allApplications => 'All apps';
+
+  @override
+  String get unknownApplication => 'Unknown app';
 
   @override
   String get myQRCode => 'QR ของฉัน';
@@ -1182,4 +1197,32 @@ class AppLocalizationsTh extends AppLocalizations {
 
   @override
   String get mcpInvalidPort => 'Invalid port number';
+
+  @override
+  String get firstHopProxyMode => 'Proxyman-style First Hop';
+
+  @override
+  String get firstHopProxyModeDescription =>
+      'Requires System Proxy and may request administrator authorization on first use. It temporarily routes macOS HTTP/HTTPS through ProxyPin, restores on normal exit, and never modifies Surge; reopen ProxyPin to recover after a force quit';
+
+  @override
+  String get firstHopUpstreamLocked =>
+      'The upstream is locked while first-hop is active. Restore the system proxy before changing it.';
+
+  @override
+  String get chainSystemProxy => 'Use Current Proxy as Single Upstream';
+
+  @override
+  String get chainSystemProxyDescription =>
+      'Builds ProxyPin → current HTTP proxy when taking ownership; no polling and no Surge configuration changes';
+
+  @override
+  String systemProxyOverridden(String endpoint) {
+    return 'ProxyPin identified $endpoint as its single upstream, but that network service still owns the effective macOS route. To avoid outages and proxy loops, ProxyPin will not compete for it; only requests explicitly sent through ProxyPin will be captured.';
+  }
+
+  @override
+  String externalProxyLoopError(int localPort) {
+    return 'The upstream proxy cannot point back to ProxyPin port $localPort.';
+  }
 }

@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:menu_base/menu_base.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -15,6 +14,18 @@ class DesktopTrayManager with TrayListener {
 
   void setQuitHandler(Future<void> Function()? handler) {
     _quitHandler = handler;
+  }
+
+  /// Requests a real application quit rather than a window close. The
+  /// registered handler restores any owned system-proxy lease before the
+  /// process and its listener are destroyed.
+  Future<void> requestQuit() async {
+    final handler = _quitHandler;
+    if (handler != null) {
+      await handler();
+      return;
+    }
+    throw StateError('安全退出处理器尚未就绪，已取消退出');
   }
 
   String _text(String zh, String en) => Platform.localeName.startsWith('zh') ? zh : en;
@@ -83,9 +94,8 @@ class DesktopTrayManager with TrayListener {
         unawaited(restoreWindow());
         break;
       case 'quit_app':
-        unawaited(_quitHandler?.call() ?? exitApp());
+        unawaited(requestQuit());
         break;
     }
   }
 }
-

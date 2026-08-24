@@ -8,8 +8,15 @@ class PortWidget extends StatefulWidget {
   final ProxyServer proxyServer;
   final TextStyle? textStyle;
   final String? title;
+  final bool enabled;
 
-  const PortWidget({super.key, required this.proxyServer, this.textStyle, this.title});
+  const PortWidget({
+    super.key,
+    required this.proxyServer,
+    this.textStyle,
+    this.title,
+    this.enabled = true,
+  });
 
   @override
   State<StatefulWidget> createState() {
@@ -29,21 +36,29 @@ class _PortState extends State<PortWidget> {
     textController.text = widget.proxyServer.port.toString();
     portFocus.addListener(() async {
       //失去焦点
+      if (!widget.enabled || widget.proxyServer.systemProxyRoutingLocked) {
+        textController.text = widget.proxyServer.port.toString();
+        return;
+      }
       if (!portFocus.hasFocus && textController.text != widget.proxyServer.port.toString()) {
         final port = int.tryParse(textController.text) ?? -1;
-        if (port < 0 || port > 65535) {
+        if (port < 1 || port > 65535) {
           textController.text = widget.proxyServer.port.toString();
-          FlutterToastr.show("Port out of range 0-65535", context, duration: 3);
+          FlutterToastr.show("Port out of range 1-65535", context, duration: 3);
           return;
         }
 
         widget.proxyServer.configuration.port = port;
 
         if (widget.proxyServer.isRunning) {
-          String message = localizations.proxyPortRepeat(widget.proxyServer.port);
-          widget.proxyServer.restart().catchError((e) => FlutterToastr.show(message, context, duration: 3));
+          final message = localizations.proxyPortRepeat(widget.proxyServer.port);
+          try {
+            await widget.proxyServer.restart();
+          } catch (_) {
+            if (mounted) FlutterToastr.show(message, context, duration: 3);
+          }
         }
-        widget.proxyServer.configuration.flushConfig();
+        await widget.proxyServer.configuration.flushConfig();
       }
     });
   }
@@ -63,6 +78,7 @@ class _PortState extends State<PortWidget> {
       SizedBox(
           width: 80,
           child: TextFormField(
+            enabled: widget.enabled,
             focusNode: portFocus,
             controller: textController,
             textAlign: TextAlign.center,

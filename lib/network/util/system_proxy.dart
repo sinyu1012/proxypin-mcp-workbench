@@ -14,13 +14,31 @@
  * limitations under the License.
  */
 
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:proxypin/network/channel/host_port.dart';
 import 'package:proxypin/network/util/logger.dart';
+import 'package:proxypin/network/util/system_proxy_snapshot.dart';
 import 'package:proxypin/utils/ip.dart';
 import 'package:proxypin/utils/lang.dart';
 import 'package:proxy_manager/proxy_manager.dart';
+
+class SystemProxyTransactionException implements Exception {
+  final String message;
+  final String code;
+  final bool mayHaveChanged;
+
+  const SystemProxyTransactionException({
+    required this.message,
+    required this.code,
+    required this.mayHaveChanged,
+  });
+
+  @override
+  String toString() => message;
+}
 
 /// @author wanghongen
 /// 2023/7/26
@@ -67,6 +85,57 @@ class SystemProxy {
     return instance._getSystemProxy(types);
   }
 
+  /// Capture the current HTTP/HTTPS proxy state before ProxyPin takes over.
+  static Future<SystemProxySnapshot> getSystemProxySnapshot({String? networkService}) {
+    return instance._getSystemProxySnapshot(networkService: networkService);
+  }
+
+  /// Capture the proxy route that is currently effective for new requests.
+  ///
+  /// macOS resolves this from `scutil --proxy`; other platforms fall back to
+  /// their configured proxy snapshot.
+  static Future<SystemProxySnapshot> getEffectiveSystemProxySnapshot() {
+    return instance._getEffectiveSystemProxySnapshot();
+  }
+
+  /// Restore a state previously returned by [getSystemProxySnapshot].
+  static Future<void> restoreSystemProxy(SystemProxySnapshot snapshot) {
+    return instance._restoreSystemProxy(snapshot);
+  }
+
+  /// Take ownership of one immutable network service for the whole
+  /// transaction. macOS must not re-resolve the active service between the
+  /// backup and the write.
+  static Future<void> takeSystemProxyOwnership({
+    required int port,
+    required String passDomains,
+    String? networkService,
+    SystemProxySnapshot? expected,
+  }) {
+    return instance._takeSystemProxyOwnership(
+      port: port,
+      passDomains: passDomains,
+      networkService: networkService,
+      expected: expected,
+    );
+  }
+
+  /// Restore only protocol endpoints that still belong to ProxyPin. This
+  /// preserves a newer owner that may have changed HTTP or HTTPS meanwhile.
+  static Future<void> restoreOwnedSystemProxyEndpoints({
+    required SystemProxySnapshot backup,
+    required String ownerHost,
+    required int ownerPort,
+    required String expectedBypassDomains,
+  }) {
+    return instance._restoreOwnedSystemProxyEndpoints(
+      backup: backup,
+      ownerHost: ownerHost,
+      ownerPort: ownerPort,
+      expectedBypassDomains: expectedBypassDomains,
+    );
+  }
+
   ///设置系统代理
   static Future<void> setSystemProxy(int port, bool sslSetting, String proxyPassDomains) async {
     await instance._setSystemProxy(port, sslSetting, proxyPassDomains);
@@ -102,6 +171,53 @@ class SystemProxy {
     return null;
   }
 
+  Future<SystemProxySnapshot> _getSystemProxySnapshot({String? networkService}) async {
+    final proxies = await Future.wait([
+      _getSystemProxy(ProxyTypes.http),
+      _getSystemProxy(ProxyTypes.https),
+    ]);
+    return SystemProxySnapshot(http: proxies[0], https: proxies[1]);
+  }
+
+  Future<SystemProxySnapshot> _getEffectiveSystemProxySnapshot() {
+    return _getSystemProxySnapshot();
+  }
+
+  Future<void> _takeSystemProxyOwnership({
+    required int port,
+    required String passDomains,
+    String? networkService,
+    SystemProxySnapshot? expected,
+  }) {
+    return _setSystemProxy(port, true, passDomains).then((_) {});
+  }
+
+  Future<void> _restoreOwnedSystemProxyEndpoints({
+    required SystemProxySnapshot backup,
+    required String ownerHost,
+    required int ownerPort,
+    required String expectedBypassDomains,
+  }) async {
+    final current = await _getSystemProxySnapshot(networkService: backup.networkService);
+    if (current.ownsAnyEndpoint(host: ownerHost, port: ownerPort)) {
+      await _restoreSystemProxy(backup);
+    }
+  }
+
+  Future<void> _restoreSystemProxy(SystemProxySnapshot snapshot) async {
+    final manager = ProxyManager();
+    await manager.cleanSystemProxy();
+    if (snapshot.http != null) {
+      await manager.setAsSystemProxy(ProxyTypes.http, snapshot.http!.host, snapshot.http!.port!);
+    }
+    if (snapshot.https != null) {
+      await manager.setAsSystemProxy(ProxyTypes.https, snapshot.https!.host, snapshot.https!.port!);
+    }
+    if (snapshot.bypassDomains != null) {
+      await _setProxyPassDomains(snapshot.bypassDomains!);
+    }
+  }
+
   ///设置系统代理
   Future<void> _setSystemProxy(int port, bool sslSetting, String proxyPassDomains) async {
     ProxyManager manager = ProxyManager();
@@ -126,6 +242,13 @@ class SystemProxy {
 
 class MacSystemProxy implements SystemProxy {
   static String? _hardwarePort;
+  static const MethodChannel _systemProxyChannel = MethodChannel('com.proxy/systemProxy');
+
+  static Future<String> _refreshHardwarePort() async {
+    final name = await hardwarePort();
+    _hardwarePort = name;
+    return name;
+  }
 
   // Helper to safely quote a string for sh (single-quote and escape any internal single quotes)
   static String _shellQuote(String s) {
@@ -146,16 +269,17 @@ class MacSystemProxy implements SystemProxy {
 
     final quotedName = _shellQuote(_hardwarePort!);
 
-    var result = await Process.run('bash', [
-      '-c',
-      'networksetup ${proxyTypes == ProxyTypes.http ? '-getwebproxy' : '-getsecurewebproxy'} $quotedName'
-    ]).then((results) => results.stdout.toString().split('\n'));
+    final commandResult = await Process.run('bash',
+        ['-c', 'networksetup ${proxyTypes == ProxyTypes.http ? '-getwebproxy' : '-getsecurewebproxy'} $quotedName']);
+    if (commandResult.exitCode != 0) {
+      throw StateError('读取 macOS 系统代理失败: ${commandResult.stderr}');
+    }
+    final result = commandResult.stdout.toString().split('\n');
 
     // defensive parsing: find lines safely
     String enabledLine = result.firstWhere((item) => item.contains('Enabled'), orElse: () => '');
     if (enabledLine.isEmpty) {
-      logger.e('Failed to parse Enabled line from networksetup output: ${result.join('\n')}');
-      return null;
+      throw StateError('无法解析 macOS 系统代理状态: ${result.join('\n')}');
     }
 
     var proxyEnableParts = enabledLine.trim().split(RegExp(r":\s*"));
@@ -167,8 +291,7 @@ class MacSystemProxy implements SystemProxy {
     String serverLine = result.firstWhere((item) => item.contains('Server'), orElse: () => '');
     String portLine = result.firstWhere((item) => item.contains('Port'), orElse: () => '');
     if (serverLine.isEmpty || portLine.isEmpty) {
-      logger.e('Failed to parse Server/Port from networksetup output: ${result.join('\n')}');
-      return null;
+      throw StateError('无法解析 macOS 系统代理地址: ${result.join('\n')}');
     }
 
     var proxyServer = serverLine.trim().split(RegExp(r":\s*"))[1];
@@ -179,37 +302,106 @@ class MacSystemProxy implements SystemProxy {
     return null;
   }
 
+  Future<ProxyInfo?> _getProxyForService(ProxyTypes proxyTypes, String networkService) async {
+    final quotedName = _shellQuote(networkService);
+    final commandResult = await Process.run('bash',
+        ['-c', 'networksetup ${proxyTypes == ProxyTypes.http ? '-getwebproxy' : '-getsecurewebproxy'} $quotedName']);
+    if (commandResult.exitCode != 0) {
+      throw StateError('读取 macOS 系统代理失败: ${commandResult.stderr}');
+    }
+    final result = commandResult.stdout.toString().split('\n');
+    final enabledLine = result.firstWhere((item) => item.contains('Enabled'), orElse: () => '');
+    if (enabledLine.isEmpty) {
+      throw StateError('无法解析 macOS 系统代理状态: ${result.join('\n')}');
+    }
+    final enabledParts = enabledLine.trim().split(RegExp(r":\s*"));
+    if ((enabledParts.length > 1 ? enabledParts[1] : 'No') == 'No') return null;
+
+    final serverLine = result.firstWhere((item) => item.contains('Server'), orElse: () => '');
+    final portLine = result.firstWhere((item) => item.contains('Port'), orElse: () => '');
+    if (serverLine.isEmpty || portLine.isEmpty) {
+      throw StateError('无法解析 macOS 系统代理地址: ${result.join('\n')}');
+    }
+    final proxyServer = serverLine.trim().split(RegExp(r":\s*"))[1];
+    final proxyPort = int.tryParse(portLine.trim().split(RegExp(r":\s*"))[1]);
+    if (proxyServer.isEmpty || proxyPort == null) {
+      throw StateError('无法解析 macOS 系统代理地址: ${result.join('\n')}');
+    }
+    return ProxyInfo.of(proxyServer, proxyPort);
+  }
+
   ///mac设置代理地址
   @override
   Future<bool> _setSystemProxy(int port, bool sslSetting, String proxyPassDomains) async {
-    _hardwarePort = _hardwarePort ?? await hardwarePort();
-    if (_hardwarePort == null || _hardwarePort!.isEmpty) {
+    final networkService = await _refreshHardwarePort();
+    if (networkService.isEmpty) {
       logger.e('hardwarePort is empty, cannot set system proxy');
       return false;
     }
 
-    final quotedName = _shellQuote(_hardwarePort!);
+    await _takeSystemProxyOwnership(
+      port: port,
+      passDomains: proxyPassDomains,
+      networkService: networkService,
+    );
+    return true;
+  }
+
+  @override
+  Future<void> _takeSystemProxyOwnership({
+    required int port,
+    required String passDomains,
+    String? networkService,
+    SystemProxySnapshot? expected,
+  }) async {
+    final service = networkService ?? await _refreshHardwarePort();
+    if (service.isEmpty) throw StateError('无法识别 macOS 网络服务，未接管系统代理');
+    if (port < 1 || port > 65535) throw StateError('ProxyPin 监听端口无效: $port');
+
+    final quotedName = _shellQuote(service);
+
+    if (expected != null) {
+      try {
+        await _systemProxyChannel.invokeMethod<void>('takeOwnership', {
+          'networkService': service,
+          'expected': expected.toJson(),
+          'ownerHost': '127.0.0.1',
+          'ownerPort': port,
+        });
+      } on PlatformException catch (error) {
+        final details = error.details;
+        final mayHaveChanged = details is Map ? details['mayHaveChanged'] == true : true;
+        throw SystemProxyTransactionException(
+          message: error.message ?? 'macOS 系统代理事务失败',
+          code: error.code,
+          mayHaveChanged: mayHaveChanged,
+        );
+      }
+      return;
+    }
 
     List<String> commands = [
       'networksetup -setwebproxy $quotedName 127.0.0.1 $port',
-      sslSetting == true ? 'networksetup -setsecurewebproxy $quotedName 127.0.0.1 $port' : '',
-      'networksetup -setproxybypassdomains $quotedName ${proxyPassDomains.replaceAll(";", " ")}',
-      'networksetup -setsocksfirewallproxystate $quotedName off',
+      'networksetup -setsecurewebproxy $quotedName 127.0.0.1 $port',
+      'networksetup -setproxybypassdomains $quotedName ${_proxyBypassArgs(passDomains)}',
     ];
     var results = await Process.run('bash', ['-c', _concatCommands(commands)]);
-    logger.d('set proxyServer, name: $_hardwarePort, exitCode: ${results.exitCode}, stdout: ${results.stdout}');
+    logger.d('set proxyServer, name: $service, exitCode: ${results.exitCode}, stdout: ${results.stdout}');
     bool success = results.exitCode == 0;
     if (!success) {
       logger.e('setSystemProxy failed, stderr: ${results.stderr}');
-      return setProxyWithAuth(commands);
+      // A modal administrator prompt creates an unbounded race window in
+      // which Surge can change the same service. Until ProxyPin has a signed
+      // privileged helper that performs an atomic compare-and-swap, fail
+      // closed instead of replaying stale commands after authorization.
+      throw StateError('设置 macOS 系统代理失败；为避免覆盖授权期间变化的 Surge 配置，本次未使用管理员重试');
     }
-    return success;
   }
 
   ///设置Https代理
   @override
   Future<bool> _setSslProxyEnable(bool proxyEnable, port) async {
-    var name = _hardwarePort ?? await hardwarePort();
+    var name = await _refreshHardwarePort();
     if (name.isEmpty) {
       logger.e('hardwarePort is empty, cannot set ssl proxy state');
       return false;
@@ -233,10 +425,17 @@ class MacSystemProxy implements SystemProxy {
 
   ///mac获取当前网络名称
   static Future<String> hardwarePort() async {
+    final primaryService = await _primaryNetworkServiceName();
+    if (primaryService.isNotEmpty) return primaryService;
+
+    // Older macOS versions or unusual network states may not expose a global
+    // PrimaryService. Keep the physical-interface lookup as a compatibility
+    // fallback, but never prefer en0 over an active VPN/Network Extension.
     var name = await networkName();
     // Use a safer pipeline that avoids embedding awk's $2 (which complicates Dart string quoting).
     // This command finds the Device line, takes the following Hardware Port line, and extracts the part after ':'
-    var cmd = 'networksetup -listnetworkserviceorder | grep "Device: ${name}" -A 1 | grep "Hardware Port" | cut -d: -f2 | sed -n \'1p\'';
+    var cmd =
+        'networksetup -listnetworkserviceorder | grep "Device: $name" -A 1 | grep "Hardware Port" | cut -d: -f2 | sed -n \'1p\'';
     var results = await Process.run('bash', ['-c', cmd]);
     var out = results.stdout.toString().trim();
     if (out.isEmpty) return '';
@@ -245,17 +444,48 @@ class MacSystemProxy implements SystemProxy {
     return parts.first.trim();
   }
 
+  static Future<String> _primaryNetworkServiceName() async {
+    try {
+      final globalIPv4 = await _scutilShow('State:/Network/Global/IPv4');
+      final serviceId = RegExp(r'PrimaryService\s*:\s*([^\s}]+)').firstMatch(globalIPv4)?.group(1)?.trim();
+      if (serviceId == null || serviceId.isEmpty) return '';
+
+      final service = await _scutilShow('Setup:/Network/Service/$serviceId');
+      return RegExp(r'UserDefinedName\s*:\s*(.+)').firstMatch(service)?.group(1)?.trim() ?? '';
+    } catch (error) {
+      logger.w('读取 macOS PrimaryService 失败，回退到物理网络服务: $error');
+      return '';
+    }
+  }
+
+  static Future<String> _scutilShow(String key) async {
+    final process = await Process.start('/usr/sbin/scutil', const []);
+    final stdoutFuture = process.stdout.transform(utf8.decoder).join();
+    final stderrFuture = process.stderr.transform(utf8.decoder).join();
+    process.stdin.writeln('show $key');
+    process.stdin.writeln('quit');
+    await process.stdin.close();
+
+    final exitCode = await process.exitCode;
+    final output = await stdoutFuture;
+    final error = await stderrFuture;
+    if (exitCode != 0) {
+      throw StateError('scutil 读取 $key 失败: $error');
+    }
+    return output;
+  }
+
   ///设置代理忽略地址
   @override
   Future<void> _setProxyPassDomains(String proxyPassDomains) async {
-    _hardwarePort ??= await hardwarePort();
+    await _refreshHardwarePort();
     if (_hardwarePort == null || _hardwarePort!.isEmpty) {
       logger.e('hardwarePort is empty, cannot set proxy bypass domains');
       return;
     }
     final quotedName = _shellQuote(_hardwarePort!);
     var results = await Process.run(
-        'bash', ['-c', 'networksetup -setproxybypassdomains $quotedName ${proxyPassDomains.replaceAll(";", " ")}']);
+        'bash', ['-c', 'networksetup -setproxybypassdomains $quotedName ${_proxyBypassArgs(proxyPassDomains)}']);
     logger.d('set proxyPassDomains, name: $_hardwarePort, exitCode: ${results.exitCode}, stdout: ${results.stdout}');
   }
 
@@ -263,7 +493,7 @@ class MacSystemProxy implements SystemProxy {
   @override
   Future<void> _setProxyEnable(bool proxyEnable, bool sslSetting) async {
     var proxyMode = proxyEnable ? 'on' : 'off';
-    _hardwarePort ??= await hardwarePort();
+    await _refreshHardwarePort();
     if (_hardwarePort == null || _hardwarePort!.isEmpty) {
       logger.e('hardwarePort is empty, cannot set proxy enable state');
       return;
@@ -285,7 +515,7 @@ class MacSystemProxy implements SystemProxy {
 
   Future<bool> setProxyWithAuth(List<String> commands) async {
     // 使用 quoted form of 确保 shell 指令被 AppleScript 正确转义
-    String script = 'do shell script "${commands.join('; ')}" with administrator privileges';
+    String script = 'do shell script "${_concatCommands(commands)}" with administrator privileges';
     try {
       final result = await Process.run('osascript', ['-e', script]);
       bool success = result.exitCode == 0;
@@ -301,6 +531,117 @@ class MacSystemProxy implements SystemProxy {
 
   static String _concatCommands(List<String> commands) {
     return commands.where((element) => element.isNotEmpty).join(' && ');
+  }
+
+  static String _proxyBypassArgs(String value) {
+    final entries =
+        value.split(';').map((entry) => entry.trim()).where((entry) => entry.isNotEmpty).map(_shellQuote).toList();
+    return entries.isEmpty ? 'Empty' : entries.join(' ');
+  }
+
+  @override
+  Future<SystemProxySnapshot> _getEffectiveSystemProxySnapshot() async {
+    final result = await Process.run('/usr/sbin/scutil', ['--proxy']);
+    if (result.exitCode != 0) {
+      throw StateError('读取 macOS 有效系统代理失败: ${result.stderr}');
+    }
+    return SystemProxySnapshot.fromScutilProxyOutput(result.stdout.toString());
+  }
+
+  @override
+  Future<SystemProxySnapshot> _getSystemProxySnapshot({String? networkService}) async {
+    final service = networkService ?? await _refreshHardwarePort();
+    if (service.isEmpty) {
+      throw StateError('无法识别当前 macOS 网络服务，未接管系统代理');
+    }
+    final proxies = await Future.wait([
+      _getProxyForService(ProxyTypes.http, service),
+      _getProxyForService(ProxyTypes.https, service),
+      _getProxyPassDomains(service),
+    ]);
+    return SystemProxySnapshot(
+      http: proxies[0] as ProxyInfo?,
+      https: proxies[1] as ProxyInfo?,
+      bypassDomains: proxies[2] as String,
+      networkService: service,
+    );
+  }
+
+  Future<String> _getProxyPassDomains(String networkService) async {
+    if (networkService.isEmpty) {
+      throw StateError('无法识别当前 macOS 网络服务，未读取代理绕过列表');
+    }
+    final result = await Process.run(
+      'networksetup',
+      ['-getproxybypassdomains', networkService],
+    );
+    if (result.exitCode != 0) {
+      throw StateError('读取 macOS 代理绕过列表失败: ${result.stderr}');
+    }
+
+    final lines = result.stdout
+        .toString()
+        .split(RegExp(r'[\r\n]+'))
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+    if (lines.isEmpty || lines.first.startsWith("There aren't any")) return '';
+    if (lines.first.startsWith('These are the bypass domains')) {
+      lines.removeAt(0);
+    }
+    return lines.join(';');
+  }
+
+  @override
+  Future<void> _restoreSystemProxy(SystemProxySnapshot snapshot) async {
+    final service = snapshot.networkService ?? await _refreshHardwarePort();
+    if (service.isEmpty) {
+      throw StateError('hardwarePort is empty, cannot restore system proxy');
+    }
+
+    final quotedName = _shellQuote(service);
+    final commands = <String>[
+      snapshot.http == null
+          ? 'networksetup -setwebproxystate $quotedName off'
+          : 'networksetup -setwebproxy $quotedName ${_shellQuote(snapshot.http!.host)} ${snapshot.http!.port}',
+      snapshot.https == null
+          ? 'networksetup -setsecurewebproxystate $quotedName off'
+          : 'networksetup -setsecurewebproxy $quotedName ${_shellQuote(snapshot.https!.host)} ${snapshot.https!.port}',
+    ];
+    if (snapshot.bypassDomains != null) {
+      final entries = snapshot.bypassDomains!
+          .split(';')
+          .map((entry) => entry.trim())
+          .where((entry) => entry.isNotEmpty)
+          .map(_shellQuote)
+          .toList();
+      commands.add(
+        'networksetup -setproxybypassdomains $quotedName ${entries.isEmpty ? 'Empty' : entries.join(' ')}',
+      );
+    }
+
+    final result = await Process.run('bash', ['-c', _concatCommands(commands)]);
+    if (result.exitCode == 0) return;
+    logger.e('restoreSystemProxy failed, stderr: ${result.stderr}');
+    final success = await setProxyWithAuth(commands);
+    if (!success) throw StateError('恢复系统代理失败');
+  }
+
+  @override
+  Future<void> _restoreOwnedSystemProxyEndpoints({
+    required SystemProxySnapshot backup,
+    required String ownerHost,
+    required int ownerPort,
+    required String expectedBypassDomains,
+  }) async {
+    final service = backup.networkService ?? await _refreshHardwarePort();
+    if (service.isEmpty) throw StateError('无法识别恢复租约对应的 macOS 网络服务');
+    await _systemProxyChannel.invokeMethod<void>('restoreOwnedEndpoints', {
+      'networkService': service,
+      'backup': backup.toJson(),
+      'ownerHost': ownerHost,
+      'ownerPort': ownerPort,
+    });
   }
 }
 

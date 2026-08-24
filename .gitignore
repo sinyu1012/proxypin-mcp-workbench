@@ -60,6 +60,11 @@ test/*
 !test/network_panel_split_layout_test.dart
 !test/capture_plan_test.dart
 !test/har_archive_recovery_test.dart
+!test/source_device_test.dart
+!test/application_source_test.dart
+!test/system_proxy_snapshot_test.dart
+!test/system_proxy_first_hop_test.dart
+!test/desktop_navigation_test.dart
 
 # Local capture/runtime data — never publish credentials or personal traffic.
 *.har

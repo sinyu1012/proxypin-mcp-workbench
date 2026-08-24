@@ -4,6 +4,7 @@
   "breakpointRule": "断点规则",
   "name": "名称",
   "requests": "抓包",
+  "localCapture": "本机抓包",
   "favorites": "收藏",
   "history": "历史",
   "toolbox": "工具箱",
@@ -36,6 +37,10 @@
   "connectRemote": "连接终端",
   "remoteDevice": "远程设备",
   "remoteDeviceList": "远程设备列表",
+  "allSourceDevices": "全部设备",
+  "unknownSourceDevice": "未知来源",
+  "allApplications": "全部应用",
+  "unknownApplication": "未知应用",
   "myQRCode": "我的二维码",
 
   "theme": "主题",
@@ -410,5 +415,26 @@
   "mcpToolCompareDesc": "对比两个请求的差异",
   "mcpStartSuccess": "MCP 服务已启动，端口 {port}",
   "mcpStopSuccess": "MCP 服务已停止",
-  "mcpInvalidPort": "无效的端口号"
+  "mcpInvalidPort": "无效的端口号",
+  "firstHopProxyMode": "Proxyman 第一跳模式",
+  "firstHopProxyModeDescription": "需同时开启“设置为系统代理”；首次启用可能要求管理员授权。临时让 macOS HTTP/HTTPS 先经过 ProxyPin，正常退出时恢复且不修改 Surge；强制退出后请重新打开 ProxyPin 自动恢复",
+  "firstHopUpstreamLocked": "第一跳运行期间上游已锁定；请先恢复系统代理，再修改上游。",
+  "chainSystemProxy": "将当前代理作为唯一上游",
+  "chainSystemProxyDescription": "接管系统代理时形成 ProxyPin → 当前 HTTP 代理；仅检测一次，不轮询、不修改 Surge 配置",
+  "systemProxyOverridden": "ProxyPin 已将 {endpoint} 识别为唯一上游，但 macOS 当前仍由该网络服务接管。为避免断网与多重代理，本次不自动争抢；仅显式使用 ProxyPin 代理的请求会被捕获。",
+  "@systemProxyOverridden": {
+    "placeholders": {
+      "endpoint": {
+        "type": "String"
+      }
+    }
+  },
+  "externalProxyLoopError": "上游代理不能指回 ProxyPin 自身端口 {localPort}。",
+  "@externalProxyLoopError": {
+    "placeholders": {
+      "localPort": {
+        "type": "int"
+      }
+    }
+  }
 }

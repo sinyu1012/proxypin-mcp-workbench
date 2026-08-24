@@ -27,6 +27,7 @@ import 'package:proxypin/network/channel/channel_context.dart';
 import 'package:proxypin/network/http/http.dart';
 import 'package:proxypin/network/http/websocket.dart';
 import 'package:proxypin/network/util/logger.dart';
+import 'package:proxypin/network/util/source_address.dart';
 import 'package:proxypin/storage/histories.dart';
 import 'package:proxypin/ui/component/memory_cleanup.dart';
 import 'package:proxypin/ui/component/widgets.dart';
@@ -68,7 +69,8 @@ class _DesktopHomePagePageState extends State<DesktopHomePage> implements EventL
 
   static final GlobalKey<DesktopRequestListState> requestListStateKey = GlobalKey<DesktopRequestListState>();
 
-  final ValueNotifier<int> _selectIndex = ValueNotifier(0);
+  final ValueNotifier<int> _selectIndex = ValueNotifier(DesktopNavigationIndex.capture);
+  final ValueNotifier<CaptureSourceScope> _captureViewMode = ValueNotifier(CaptureSourceScope.external);
   StreamSubscription<HistoryItem>? _remoteHistorySubscription;
   final List<({Channel channel, HttpRequest request})> _pendingRequests = [];
   final List<({ChannelContext context, HttpResponse response})> _pendingResponses = [];
@@ -88,7 +90,9 @@ class _DesktopHomePagePageState extends State<DesktopHomePage> implements EventL
     _scheduleCaptureFlush();
 
     if (request.attributes['quickShare'] == true) {
-      _selectIndex.value = 0;
+      _selectIndex.value = isLoopbackSourceAddress(request.sourceIp)
+          ? DesktopNavigationIndex.localCapture
+          : DesktopNavigationIndex.capture;
       panel.change(request, request.response);
     }
 
@@ -156,11 +160,12 @@ class _DesktopHomePagePageState extends State<DesktopHomePage> implements EventL
   @override
   void initState() {
     super.initState();
+    _selectIndex.addListener(_handleNavigationChanged);
     proxyServer.addListener(this);
     panel = NetworkTabController(tabStyle: const TextStyle(fontSize: 16), proxyServer: proxyServer);
     _remoteHistorySubscription = HistoryStorage.onRemoteImported.listen((_) {
       if (mounted) {
-        _selectIndex.value = 3;
+        _selectIndex.value = DesktopNavigationIndex.history;
       }
     });
 
@@ -196,16 +201,36 @@ class _DesktopHomePagePageState extends State<DesktopHomePage> implements EventL
     _proxyStatusSub?.cancel();
     _proxyStatusSub = null;
     _remoteHistorySubscription?.cancel();
+    _selectIndex.removeListener(_handleNavigationChanged);
+    _selectIndex.dispose();
+    _captureViewMode.dispose();
     super.dispose();
+  }
+
+  void _handleNavigationChanged() {
+    switch (_selectIndex.value) {
+      case DesktopNavigationIndex.capture:
+        _captureViewMode.value = CaptureSourceScope.external;
+        break;
+      case DesktopNavigationIndex.localCapture:
+        _captureViewMode.value = CaptureSourceScope.localMachine;
+        break;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     var navigationView = [
-      DesktopRequestListWidget(key: requestListStateKey, proxyServer: proxyServer, list: container, panel: panel),
+      DesktopRequestListWidget(
+        key: requestListStateKey,
+        proxyServer: proxyServer,
+        list: container,
+        panel: panel,
+        captureViewMode: _captureViewMode,
+      ),
       AutomationWorkbenchPage(
         requestsProvider: () => container.source,
-        onOpenHistory: () => _selectIndex.value = 3,
+        onOpenHistory: () => _selectIndex.value = DesktopNavigationIndex.history,
         proxyServer: proxyServer,
       ),
       Favorites(panel: panel),
@@ -236,11 +261,12 @@ class _DesktopHomePagePageState extends State<DesktopHomePage> implements EventL
             Expanded(
               child: ValueListenableBuilder(
                 valueListenable: _selectIndex,
-                builder: (_, index, __) {
+                builder: (_, navigationIndex, __) {
+                  final contentIndex = DesktopNavigationIndex.contentIndex(navigationIndex);
                   // 工作台、历史、工具箱和 MCP 都是独立页面，不应被请求详情面板挤占。
-                  // 仅抓包列表与收藏需要保留右侧请求详情。
-                  if (index == 1 || index >= 3) {
-                    return LazyIndexedStack(index: index < 0 ? 0 : index, children: navigationView);
+                  // 抓包、本机抓包与收藏复用同一个右侧请求详情面板。
+                  if (!DesktopNavigationIndex.usesRequestPanel(navigationIndex)) {
+                    return LazyIndexedStack(index: contentIndex < 0 ? 0 : contentIndex, children: navigationView);
                   }
                   return VerticalSplitView(
                       ratio: widget.appConfiguration.panelRatio,
@@ -250,7 +276,7 @@ class _DesktopHomePagePageState extends State<DesktopHomePage> implements EventL
                         widget.appConfiguration.panelRatio = double.parse(ratio.toStringAsFixed(2));
                         widget.appConfiguration.flushConfig();
                       },
-                      left: LazyIndexedStack(index: index < 0 ? 0 : index, children: navigationView),
+                      left: LazyIndexedStack(index: contentIndex < 0 ? 0 : contentIndex, children: navigationView),
                       right: panel);
                 },
               ),

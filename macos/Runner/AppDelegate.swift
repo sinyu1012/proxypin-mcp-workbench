@@ -3,6 +3,8 @@ import FlutterMacOS
 
 @main
 class AppDelegate: FlutterAppDelegate {
+    private var terminationInProgress = false
+    private var terminationApproved = false
     
     override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
@@ -25,9 +27,24 @@ class AppDelegate: FlutterAppDelegate {
       return true
     }
 
-    override func applicationWillTerminate(_ notification: Notification) {
-        AppLifecycleChannel.appDetached()
-        NSLog("applicationWillTerminate")
+    override func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationApproved {
+            return .terminateNow
+        }
+        if terminationInProgress {
+            return .terminateLater
+        }
+
+        terminationInProgress = true
+        AppLifecycleChannel.requestTermination { [weak self] safeToTerminate in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.terminationInProgress = false
+                self.terminationApproved = safeToTerminate
+                sender.reply(toApplicationShouldTerminate: safeToTerminate)
+            }
+        }
+        return .terminateLater
     }
     
 }

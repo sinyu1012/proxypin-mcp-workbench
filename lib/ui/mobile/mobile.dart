@@ -86,6 +86,12 @@ class MobileApp {
 }
 
 class MobileHomeState extends State<MobileHomePage> implements EventListener, LifecycleListener {
+  @override
+  Future<bool> onAppTerminateRequested(int requestId) async => true;
+
+  @override
+  void onAppTerminationCancelled(int requestId) {}
+
   /// 选择索引
   final ValueNotifier<int> _selectIndex = ValueNotifier(0);
 

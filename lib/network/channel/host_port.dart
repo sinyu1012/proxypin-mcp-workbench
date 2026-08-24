@@ -164,6 +164,36 @@ class ProxyInfo {
 
   ProxyInfo.of(this.host, this.port) : enabled = true;
 
+  ProxyInfo copy() => ProxyInfo.fromJson(toJson());
+
+  /// Whether this endpoint resolves to the ProxyPin listener itself.
+  ///
+  /// Keep this check allocation-free and DNS-free because it may be used while
+  /// preparing a proxy connection. The system-proxy bridge only accepts local
+  /// loopback aliases as an automatic upstream, so these aliases cover the
+  /// self-loop cases without adding work to the request hot path.
+  bool pointsToLocalPort(int localPort) {
+    if (port != localPort) return false;
+    final normalizedHost = host.trim().toLowerCase();
+    return normalizedHost == '127.0.0.1' ||
+        normalizedHost == 'localhost' ||
+        normalizedHost == '::1' ||
+        normalizedHost == '[::1]' ||
+        normalizedHost == '0.0.0.0';
+  }
+
+  bool hasSameEndpoint(ProxyInfo other) {
+    return _normalizeEndpointHost(host) == _normalizeEndpointHost(other.host) && port == other.port;
+  }
+
+  static String _normalizeEndpointHost(String value) {
+    final host = value.trim().toLowerCase();
+    if (host == 'localhost' || host == '::1' || host == '[::1]' || host == '0.0.0.0') {
+      return '127.0.0.1';
+    }
+    return host;
+  }
+
   bool get isAuthenticated => username?.isNotEmpty == true;
 
   ProxyInfo.fromJson(Map<String, dynamic> json) {

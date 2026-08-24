@@ -16,6 +16,7 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -27,6 +28,9 @@ import 'package:proxypin/network/channel/channel_context.dart';
 import 'package:proxypin/network/channel/host_port.dart';
 import 'package:proxypin/network/http/http.dart';
 import 'package:proxypin/network/http/http_client.dart';
+import 'package:proxypin/network/util/application_source.dart';
+import 'package:proxypin/network/util/process_info.dart';
+import 'package:proxypin/network/util/source_address.dart';
 import 'package:proxypin/ui/component/multi_select_controller.dart';
 import 'package:proxypin/ui/component/utils.dart';
 import 'package:proxypin/ui/component/widgets.dart';
@@ -48,8 +52,10 @@ class DesktopRequestListWidget extends StatefulWidget {
   final ProxyServer proxyServer;
   final ListenableList<HttpRequest>? list;
   final NetworkTabController panel;
+  final ValueListenable<CaptureSourceScope>? captureViewMode;
 
-  const DesktopRequestListWidget({super.key, required this.proxyServer, this.list, required this.panel});
+  const DesktopRequestListWidget(
+      {super.key, required this.proxyServer, this.list, required this.panel, this.captureViewMode});
 
   @override
   State<StatefulWidget> createState() {
@@ -58,6 +64,8 @@ class DesktopRequestListWidget extends StatefulWidget {
 }
 
 class DesktopRequestListState extends State<DesktopRequestListWidget> with AutomaticKeepAliveClientMixin {
+  static const String _allSourcesMenuValue = '__all_sources__';
+  static const String _allApplicationsMenuValue = '__all_applications__';
   final GlobalKey<RequestSequenceState> requestSequenceKey = GlobalKey<RequestSequenceState>();
   final GlobalKey<DomainWidgetState> domainListKey = GlobalKey<DomainWidgetState>();
   final GlobalKey<SearchState> searchKey = GlobalKey<SearchState>();
@@ -73,6 +81,10 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
   ListenableList<HttpRequest>? _subscribedContainer;
 
   bool sortDesc = true;
+  String? _selectedSource;
+  String? _selectedApplication;
+
+  CaptureSourceScope get _captureViewMode => widget.captureViewMode?.value ?? CaptureSourceScope.all;
 
   // 选择控制器
   final MultiSelectController selectionController = MultiSelectController();
@@ -86,6 +98,26 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
       container = widget.list!;
       _bindContainerListener(container);
     }
+    widget.captureViewMode?.addListener(_onCaptureViewModeChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant DesktopRequestListWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.captureViewMode != widget.captureViewMode) {
+      oldWidget.captureViewMode?.removeListener(_onCaptureViewModeChanged);
+      widget.captureViewMode?.addListener(_onCaptureViewModeChanged);
+      _onCaptureViewModeChanged();
+    }
+  }
+
+  void _onCaptureViewModeChanged() {
+    if (!mounted) return;
+    setState(() {
+      _selectedSource = null;
+      _selectedApplication = null;
+    });
+    _applyRequestFilters();
   }
 
   /// 订阅 container，使外部清空请求也能驱动 UI 刷新
@@ -118,11 +150,45 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
 
   bool get isSelectionMode => selectionController.isSelectionMode;
 
+  bool _matchesCaptureView(HttpRequest request) => matchesCaptureSourceScope(_captureViewMode, request.sourceIp);
+
+  bool _matchesFilters(HttpRequest request) =>
+      _matchesCaptureView(request) &&
+      matchesSourceAddress(_selectedSource, request.sourceIp) &&
+      matchesApplicationSource(_selectedApplication, request.processInfo);
+
+  bool _isRequestFilterActive() =>
+      _captureViewMode != CaptureSourceScope.all || _selectedSource != null || _selectedApplication != null;
+
+  List<String> get _sourceKeys {
+    final keys = container.where(_matchesCaptureView).map((request) => request.sourceKey).toSet().toList()..sort();
+    return keys;
+  }
+
+  List<_ApplicationFilterEntry> get _applicationEntries {
+    final entries = <String, _ApplicationFilterEntry>{};
+    for (final request in container.where(_matchesCaptureView)) {
+      final processInfo = request.processInfo;
+      final key = applicationSourceKey(processInfo);
+      entries.putIfAbsent(key, () => _ApplicationFilterEntry(key, processInfo));
+    }
+    final result = entries.values.toList();
+    result.sort((left, right) {
+      if (left.key.isEmpty) return 1;
+      if (right.key.isEmpty) return -1;
+      return applicationSourceLabel(left.processInfo)
+          .toLowerCase()
+          .compareTo(applicationSourceLabel(right.processInfo).toLowerCase());
+    });
+    return result;
+  }
+
   @override
   bool get wantKeepAlive => true;
 
   @override
   void dispose() {
+    widget.captureViewMode?.removeListener(_onCaptureViewModeChanged);
     _unbindContainerListener();
     RequestWidget.removeAutoReadByIds(container.map((request) => request.requestId));
     selectionController.clear();
@@ -164,6 +230,16 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
                     title: SizedBox(height: 40, child: TabBar(tabs: tabs, dividerColor: Colors.transparent)),
                     automaticallyImplyLeading: false,
                     actions: [popupMenus()],
+                    bottom: PreferredSize(
+                      preferredSize: const Size.fromHeight(36),
+                      child: SizedBox(
+                        height: 36,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [sourceFilterMenu(), applicationFilterMenu(), const SizedBox(width: 4)],
+                        ),
+                      ),
+                    ),
                   ),
                   bottomNavigationBar: Search(key: searchKey, onSearch: search),
                   body: Padding(
@@ -183,6 +259,8 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
                             list: container,
                             panel: widget.panel,
                             proxyServer: widget.proxyServer,
+                            requestFilter: _matchesFilters,
+                            requestFilterActive: _isRequestFilterActive,
                             selectionController: selectionController,
                             selectionHandlers: RequestSelectionHandlers(
                               onRangeSelection: rangeSelectRequest,
@@ -197,6 +275,7 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
                             key: requestSequenceKey,
                             container: container,
                             proxyServer: widget.proxyServer,
+                            requestFilter: _matchesFilters,
                             selectionController: selectionController,
                             selectionHandlers: RequestSelectionHandlers(
                               onRangeSelection: rangeSelectRequest,
@@ -209,6 +288,111 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
                         ])),
                       ])));
             })));
+  }
+
+  Widget sourceFilterMenu() {
+    final sourceKeys = _sourceKeys;
+    final selectedSource = _selectedSource;
+    final selectedLabel = selectedSource == null
+        ? localizations.allSourceDevices
+        : (selectedSource.isEmpty ? localizations.unknownSourceDevice : selectedSource);
+    return PopupMenuButton<String>(
+      key: const ValueKey('source-device-filter'),
+      tooltip: localizations.remoteDevice,
+      onSelected: (value) {
+        final selectedSource = value == _allSourcesMenuValue ? null : value;
+        if (selectedSource == _selectedSource) return;
+        setState(() => _selectedSource = selectedSource);
+        _applyRequestFilters();
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(value: _allSourcesMenuValue, child: Text(localizations.allSourceDevices)),
+        ...sourceKeys.map((source) => PopupMenuItem(
+              value: source,
+              child: Row(children: [
+                const Icon(Icons.devices_outlined, size: 17),
+                const SizedBox(width: 8),
+                Text(source.isEmpty ? localizations.unknownSourceDevice : source),
+              ]),
+            )),
+      ],
+      child: _filterChip(Icons.devices_outlined, selectedLabel),
+    );
+  }
+
+  Widget applicationFilterMenu() {
+    final entries = _applicationEntries;
+    final selectedApplication = _selectedApplication;
+    final selectedEntry =
+        selectedApplication == null ? null : entries.where((entry) => entry.key == selectedApplication).firstOrNull;
+    final selectedLabel = selectedApplication == null
+        ? localizations.allApplications
+        : (selectedApplication.isEmpty
+            ? localizations.unknownApplication
+            : applicationSourceLabel(selectedEntry?.processInfo));
+
+    return PopupMenuButton<String>(
+      key: const ValueKey('source-application-filter'),
+      tooltip: localizations.allApplications,
+      onSelected: (value) {
+        final application = value == _allApplicationsMenuValue ? null : value;
+        if (application == _selectedApplication) return;
+        setState(() => _selectedApplication = application);
+        _applyRequestFilters();
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem(value: _allApplicationsMenuValue, child: Text(localizations.allApplications)),
+        ...entries.map((entry) => PopupMenuItem(
+              value: entry.key,
+              child: Row(children: [
+                _applicationIcon(entry.processInfo),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    entry.key.isEmpty ? localizations.unknownApplication : applicationSourceLabel(entry.processInfo),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ]),
+            )),
+      ],
+      child: _filterChip(Icons.apps_outlined, selectedLabel),
+    );
+  }
+
+  Widget _filterChip(IconData icon, String label) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 96),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+      margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 2),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 16),
+        const SizedBox(width: 4),
+        Flexible(child: Text(label, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12))),
+        const Icon(Icons.arrow_drop_down, size: 15),
+      ]),
+    );
+  }
+
+  Widget _applicationIcon(ProcessInfo? processInfo) {
+    if (processInfo == null) return const Icon(Icons.help_outline, size: 17);
+    return futureWidget(
+      processInfo.getIcon(),
+      (bytes) => bytes.isEmpty
+          ? const Icon(Icons.terminal_outlined, size: 17)
+          : Image.memory(bytes, width: 17, height: 17, errorBuilder: (_, __, ___) => const SizedBox(width: 17)),
+    );
+  }
+
+  void _applyRequestFilters() {
+    domainListKey.currentState?.applyRequestFilter();
+    requestSequenceKey.currentState?.applyRequestFilter();
+    widget.panel.change(null, null);
+    selectionController.clear();
   }
 
   bool _isTextInputFocused() {
@@ -284,17 +468,28 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
 
   ///添加请求
   void add(Channel channel, HttpRequest request) {
+    final hadSource = _sourceKeys.contains(request.sourceKey);
+    final hadApplication = _applicationEntries.any((entry) => entry.key == applicationSourceKey(request.processInfo));
     container.add(request);
     domainListKey.currentState?.add(channel, request);
     requestSequenceKey.currentState?.add(request);
+    if (!hadSource && mounted) setState(() {});
+    if (!hadApplication && mounted) setState(() {});
   }
 
   void addBatch(List<({Channel channel, HttpRequest request})> entries) {
     if (entries.isEmpty) return;
+    final sourcesBefore = _sourceKeys.toSet();
+    final applicationsBefore = _applicationEntries.map((entry) => entry.key).toSet();
     final requests = entries.map((entry) => entry.request).toList(growable: false);
     container.addAll(requests);
     domainListKey.currentState?.addBatch(entries);
     requestSequenceKey.currentState?.addBatch(requests);
+    if (!sourcesBefore.containsAll(requests.map((request) => request.sourceKey)) && mounted) setState(() {});
+    if (!applicationsBefore.containsAll(requests.map((request) => applicationSourceKey(request.processInfo))) &&
+        mounted) {
+      setState(() {});
+    }
   }
 
   ///添加响应
@@ -350,6 +545,8 @@ class DesktopRequestListState extends State<DesktopRequestListWidget> with Autom
       requestSequenceKey.currentState?.clean();
       widget.panel.change(null, null);
       selectionController.clear();
+      _selectedSource = null;
+      _selectedApplication = null;
     });
   }
 
@@ -468,3 +665,10 @@ class _ClearSelectionIntent extends Intent {
 }
 
 enum _RequestListMenuAction { search, export, repeat, select, sort, report }
+
+class _ApplicationFilterEntry {
+  final String key;
+  final ProcessInfo? processInfo;
+
+  const _ApplicationFilterEntry(this.key, this.processInfo);
+}

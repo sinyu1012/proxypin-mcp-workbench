@@ -187,6 +187,7 @@
   "requestRewriteRule": "กฎเขียนคำขอใหม่",
   "requestRewriteDeleteConfirm": "ลบ {size} กฎหรือไม่?",
   "requests": "จับแพ็กเก็ต",
+  "localCapture": "จับแพ็กเก็ตเครื่องนี้",
   "reset": "รีเซ็ต",
   "resetDefaultCA": "รีเซ็ตใบรับรองรากเริ่มต้น",
   "resetDefaultCADescribe": "ต้องการรีเซ็ตใบรับรองรากเริ่มต้นหรือไม่?",

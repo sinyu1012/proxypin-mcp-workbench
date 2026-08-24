@@ -187,6 +187,7 @@
   "requestRewriteRule": "Regla de reescritura",
   "requestRewriteDeleteConfirm": "¿Eliminar {size} regla(s)?",
   "requests": "Captura",
+  "localCapture": "Captura local",
   "reset": "Restablecer",
   "resetDefaultCA": "Restablecer certificado raíz predeterminado",
   "resetDefaultCADescribe": "¿Seguro que deseas restablecer el certificado raíz predeterminado?",

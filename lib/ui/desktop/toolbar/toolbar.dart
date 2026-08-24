@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -25,6 +26,7 @@ import 'package:proxypin/ui/desktop/setting/setting.dart';
 import 'package:proxypin/ui/desktop/ssl/ssl.dart';
 import 'package:proxypin/ui/configuration.dart';
 import 'package:proxypin/ui/launch/launch.dart';
+import 'package:proxypin/utils/desktop_tray.dart';
 import 'package:proxypin/utils/ip.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:proxypin/l10n/app_localizations.dart';
@@ -83,12 +85,25 @@ class _ToolbarState extends State<Toolbar> {
     }
 
     if (HardwareKeyboard.instance.isMetaPressed && event.logicalKey == LogicalKeyboardKey.keyQ) {
-      windowManager.close();
-      windowManager.destroy();
+      // Cmd+Q is an explicit quit even when the red close button is configured
+      // to minimize to tray. The registered handler restores first-hop state
+      // before destroying the listener and window.
+      unawaited(_requestQuit());
       return true;
     }
 
     return false;
+  }
+
+  Future<void> _requestQuit() async {
+    try {
+      await DesktopTrayManager.instance.requestQuit();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString()), duration: const Duration(seconds: 9)),
+      );
+    }
   }
 
   @override

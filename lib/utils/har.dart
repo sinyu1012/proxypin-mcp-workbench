@@ -38,6 +38,7 @@ class Har {
       "pageref": "ProxyPin", // 页面标识
       "_id": request.requestId, // 页面标识
       '_app': request.processInfo?.toJson(),
+      '_sourceIp': request.sourceIp,
       "request": {
         "method": request.method.name, // 请求方法
         "url": request.requestUrl, // 请求地址
@@ -84,6 +85,7 @@ class Har {
       "_id": request.requestId,
       "_phase": "request",
       '_app': request.processInfo?.toJson(),
+      '_sourceIp': request.sourceIp,
       "request": {
         "method": request.method.name,
         "url": request.requestUrl,
@@ -110,6 +112,7 @@ class Har {
       "_id": request.requestId,
       "_phase": "response",
       '_app': request.processInfo?.toJson(),
+      '_sourceIp': request.sourceIp,
       "request": {
         "method": request.method.name,
         "url": request.requestUrl,
@@ -214,6 +217,7 @@ class Har {
     var httpRequest = HttpRequest(HttpMethod.valueOf(method), request['url'], protocolVersion: request['httpVersion']);
     if (har.containsKey("_id")) httpRequest.requestId = har['_id'].toString(); // 页面标识
     httpRequest.processInfo = har['_app'] == null ? null : ProcessInfo.fromJson(har['_app']);
+    httpRequest.sourceIp = har['_sourceIp']?.toString();
     httpRequest.body = request['postData']?['text']?.toString().codeUnits;
     for (var element in headers) {
       httpRequest.headers.add(element['name'], element['value']);

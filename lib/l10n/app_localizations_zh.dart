@@ -21,6 +21,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get requests => '抓包';
 
   @override
+  String get localCapture => '本机抓包';
+
+  @override
   String get favorites => '收藏';
 
   @override
@@ -112,6 +115,18 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get remoteDeviceList => '远程设备列表';
+
+  @override
+  String get allSourceDevices => '全部设备';
+
+  @override
+  String get unknownSourceDevice => '未知来源';
+
+  @override
+  String get allApplications => '全部应用';
+
+  @override
+  String get unknownApplication => '未知应用';
 
   @override
   String get myQRCode => '我的二维码';
@@ -1175,6 +1190,32 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get mcpInvalidPort => '无效的端口号';
+
+  @override
+  String get firstHopProxyMode => 'Proxyman 第一跳模式';
+
+  @override
+  String get firstHopProxyModeDescription =>
+      '需同时开启“设置为系统代理”；首次启用可能要求管理员授权。临时让 macOS HTTP/HTTPS 先经过 ProxyPin，正常退出时恢复且不修改 Surge；强制退出后请重新打开 ProxyPin 自动恢复';
+
+  @override
+  String get firstHopUpstreamLocked => '第一跳运行期间上游已锁定；请先恢复系统代理，再修改上游。';
+
+  @override
+  String get chainSystemProxy => '将当前代理作为唯一上游';
+
+  @override
+  String get chainSystemProxyDescription => '接管系统代理时形成 ProxyPin → 当前 HTTP 代理；仅检测一次，不轮询、不修改 Surge 配置';
+
+  @override
+  String systemProxyOverridden(String endpoint) {
+    return 'ProxyPin 已将 $endpoint 识别为唯一上游，但 macOS 当前仍由该网络服务接管。为避免断网与多重代理，本次不自动争抢；仅显式使用 ProxyPin 代理的请求会被捕获。';
+  }
+
+  @override
+  String externalProxyLoopError(int localPort) {
+    return '上游代理不能指回 ProxyPin 自身端口 $localPort。';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hant`).
@@ -1192,6 +1233,9 @@ class AppLocalizationsZhHant extends AppLocalizationsZh {
 
   @override
   String get requests => '抓包';
+
+  @override
+  String get localCapture => '本機抓包';
 
   @override
   String get favorites => '收藏';

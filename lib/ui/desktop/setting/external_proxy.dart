@@ -26,8 +26,17 @@ import 'package:proxypin/ui/component/widgets.dart';
 /// 2023/10/8
 class ExternalProxyDialog extends StatefulWidget {
   final Configuration configuration;
+  final int localProxyPort;
+  final VoidCallback? onChanged;
+  final bool Function()? routingLocked;
 
-  const ExternalProxyDialog({super.key, required this.configuration});
+  const ExternalProxyDialog({
+    super.key,
+    required this.configuration,
+    required this.localProxyPort,
+    this.onChanged,
+    this.routingLocked,
+  });
 
   @override
   State<StatefulWidget> createState() {
@@ -80,7 +89,7 @@ class _ExternalProxyDialogState extends State<ExternalProxyDialog> {
                         value: externalProxy.enabled,
                         scale: 0.85,
                         onChanged: (val) {
-                          externalProxy.enabled = val;
+                          setState(() => externalProxy.enabled = val);
                         },
                       ))
                     ]),
@@ -95,7 +104,7 @@ class _ExternalProxyDialogState extends State<ExternalProxyDialog> {
                               child: TextFormField(
                             initialValue: externalProxy.host,
                             validator: (val) => val == null || val.isEmpty ? localizations.cannotBeEmpty : null,
-                            onChanged: (val) => externalProxy.host = val,
+                            onChanged: (val) => setState(() => externalProxy.host = val),
                             decoration: const InputDecoration(
                               contentPadding: EdgeInsets.symmetric(horizontal: 8),
                               hintText: 'Host',
@@ -112,7 +121,7 @@ class _ExternalProxyDialogState extends State<ExternalProxyDialog> {
                                   LengthLimitingTextInputFormatter(5),
                                   FilteringTextInputFormatter.allow(RegExp("[0-9]"))
                                 ],
-                                onChanged: (val) => externalProxy.port = int.parse(val),
+                                onChanged: (val) => setState(() => externalProxy.port = int.tryParse(val)),
                                 validator: (val) => val == null || val.isEmpty ? localizations.cannotBeEmpty : null,
                                 decoration: const InputDecoration(
                                   contentPadding: EdgeInsets.symmetric(horizontal: 8),
@@ -164,6 +173,14 @@ class _ExternalProxyDialogState extends State<ExternalProxyDialog> {
                           ))
                         ])),
                     const SizedBox(height: 12),
+                    if (externalProxy.enabled && externalProxy.port != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          'App → ProxyPin:${widget.localProxyPort} → ${externalProxy.host}:${externalProxy.port}',
+                          style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.primary),
+                        ),
+                      ),
                     // 取消/确认按钮放在 TintedSurface 内（弹窗边框覆盖按钮面积），
                     // 避免 AlertDialog 的 actions 区域在透明背景上浮在弹窗外。
                     Row(
@@ -188,9 +205,39 @@ class _ExternalProxyDialogState extends State<ExternalProxyDialog> {
             ])));
   }
 
-  submit() async {
+  Future<void> submit() async {
+    if (widget.routingLocked?.call() == true || widget.configuration.systemProxyLeaseLocked) {
+      await showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: Text(localizations.externalProxy),
+          content: Text(localizations.firstHopUpstreamLocked),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(localizations.confirm),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     bool setting = true;
     if (externalProxy.enabled) {
+      if (externalProxy.pointsToLocalPort(widget.localProxyPort)) {
+        await showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: Text(localizations.externalProxyConnectFailure),
+            content: Text(localizations.externalProxyLoopError(widget.localProxyPort)),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(context).pop(), child: Text(localizations.confirm)),
+            ],
+          ),
+        );
+        return;
+      }
       try {
         var socket = await Socket.connect(externalProxy.host, externalProxy.port!, timeout: const Duration(seconds: 1));
         socket.destroy();
@@ -225,7 +272,8 @@ class _ExternalProxyDialogState extends State<ExternalProxyDialog> {
 
     if (setting) {
       widget.configuration.externalProxy = externalProxy;
-      widget.configuration.flushConfig();
+      await widget.configuration.flushConfig();
+      widget.onChanged?.call();
     }
 
     if (!mounted) return;

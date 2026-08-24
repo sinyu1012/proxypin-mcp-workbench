@@ -1726,7 +1726,7 @@ class McpTools {
     if (proxyServer == null) {
       return _toolError('ProxyServer 未初始化，请先在 ProxyPin 桌面端打开抓包页面');
     }
-    if (proxyServer.isRunning) {
+    if (proxyServer.isRunning && !proxyServer.isStopping) {
       return _toolResult({
         'message': '抓包服务已在运行中',
         'status': _buildProxyStatus(proxyServer, null),
@@ -1752,12 +1752,6 @@ class McpTools {
     final proxyServer = ProxyServer.current;
     if (proxyServer == null) {
       return _toolError('ProxyServer 未初始化，请先在 ProxyPin 桌面端打开抓包页面');
-    }
-    if (!proxyServer.isRunning) {
-      return _toolResult({
-        'message': '抓包服务未在运行',
-        'status': _buildProxyStatus(proxyServer, null),
-      });
     }
     try {
       await proxyServer.stop();
@@ -1981,6 +1975,8 @@ class McpTools {
       status['port'] = proxyServer.port;
       status['sslEnabled'] = proxyServer.enableSsl;
       status['systemProxyEnabled'] = config.enableSystemProxy;
+      status['firstHopProxyMode'] = config.firstHopProxyMode;
+      status['chainSystemProxy'] = config.chainSystemProxy;
       status['socks5Enabled'] = config.enableSocks5;
       status['http2Enabled'] = config.enabledHttp2;
       status['proxyPassDomains'] = config.proxyPassDomains;
@@ -1991,10 +1987,20 @@ class McpTools {
           'port': config.externalProxy!.port,
         };
       }
+      final effectiveUpstream = config.effectiveExternalProxy;
+      if (effectiveUpstream != null) {
+        status['effectiveUpstream'] = {
+          'host': effectiveUpstream.host,
+          'port': effectiveUpstream.port,
+          'source': config.externalProxy?.enabled == true ? 'manual' : 'detected_system_proxy',
+        };
+      }
     } else {
       status['port'] = null;
       status['sslEnabled'] = null;
       status['systemProxyEnabled'] = null;
+      status['firstHopProxyMode'] = null;
+      status['chainSystemProxy'] = null;
       status['socks5Enabled'] = null;
       status['http2Enabled'] = null;
       status['proxyPassDomains'] = null;

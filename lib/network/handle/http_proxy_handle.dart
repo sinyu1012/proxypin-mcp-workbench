@@ -68,6 +68,7 @@ class HttpProxyChannelHandler extends ChannelHandler<HttpRequest> {
 
   /// 转发请求
   Future<void> forward(ChannelContext channelContext, Channel channel, HttpRequest httpRequest) async {
+    httpRequest.sourceIp ??= channelContext.clientChannel?.remoteSocketAddress.address.address;
     // log.d("[${channel.id}] ${httpRequest.method.name} ${httpRequest.requestUrl}");
     //获取远程连接
     Channel? remoteChannel;

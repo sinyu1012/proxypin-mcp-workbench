@@ -20,6 +20,21 @@ import 'package:proxypin/ui/configuration.dart';
 import 'package:proxypin/ui/desktop/preference.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+abstract final class DesktopNavigationIndex {
+  static const int capture = 0;
+  static const int localCapture = 1;
+  static const int workbench = 2;
+  static const int favorites = 3;
+  static const int history = 4;
+  static const int toolbox = 5;
+  static const int mcp = 6;
+
+  static int contentIndex(int navigationIndex) => navigationIndex <= localCapture ? capture : navigationIndex - 1;
+
+  static bool usesRequestPanel(int navigationIndex) =>
+      navigationIndex == capture || navigationIndex == localCapture || navigationIndex == favorites;
+}
+
 ///左侧导航栏
 /// @author wanghongen
 /// 2024/8/6
@@ -45,6 +60,10 @@ class _LeftNavigationBarState extends State<LeftNavigationBar> {
             padding: const EdgeInsets.only(bottom: 5),
             icon: Icon(Icons.workspaces_outlined),
             label: Text(localizations.requests, style: Theme.of(context).textTheme.bodySmall)),
+        NavigationRailDestination(
+            padding: const EdgeInsets.only(bottom: 5),
+            icon: const Icon(Icons.desktop_mac_outlined),
+            label: Text(localizations.localCapture, style: Theme.of(context).textTheme.bodySmall)),
         NavigationRailDestination(
             padding: const EdgeInsets.only(bottom: 5),
             icon: const Icon(Icons.auto_awesome_mosaic_outlined),

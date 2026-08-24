@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:proxypin/l10n/app_localizations.dart';
 import 'package:proxypin/network/bin/configuration.dart';
@@ -87,7 +89,10 @@ class _SettingState extends State<Setting> {
             });
       },
       menuChildren: [
-        _ProxyMenu(proxyServer: widget.proxyServer),
+        _ProxyMenu(
+          proxyServer: widget.proxyServer,
+          onFirstHopChanged: () => setState(() {}),
+        ),
         item(localizations.domainFilter, onPressed: hostFilter),
         item(localizations.hosts, onPressed: hosts),
         item(localizations.requestBlock, onPressed: showRequestBlock),
@@ -97,7 +102,8 @@ class _SettingState extends State<Setting> {
         item(localizations.script,
             onPressed: () => MultiWindow.openWindow(localizations.script, 'ScriptWidget', size: const Size(800, 780))),
         item(localizations.breakpoint, onPressed: requestBreakpoint),
-        item(localizations.externalProxy, onPressed: setExternalProxy),
+        item(localizations.externalProxy,
+            onPressed: widget.proxyServer.systemProxyRoutingLocked ? null : setExternalProxy),
         item(localizations.about, onPressed: showAbout),
       ],
     );
@@ -118,11 +124,22 @@ class _SettingState extends State<Setting> {
 
   ///设置外部代理地址
   void setExternalProxy() {
+    if (widget.proxyServer.systemProxyRoutingLocked) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(localizations.firstHopUpstreamLocked)),
+      );
+      return;
+    }
     showDialog(
         barrierDismissible: false,
         context: context,
         builder: (context) {
-          return ExternalProxyDialog(configuration: widget.proxyServer.configuration);
+          return ExternalProxyDialog(
+            configuration: widget.proxyServer.configuration,
+            localProxyPort: widget.proxyServer.port,
+            onChanged: widget.proxyServer.refreshRuntimeUpstream,
+            routingLocked: () => widget.proxyServer.systemProxyRoutingLocked,
+          );
         });
   }
 
@@ -172,8 +189,9 @@ class _SettingState extends State<Setting> {
 ///代理菜单
 class _ProxyMenu extends StatefulWidget {
   final ProxyServer proxyServer;
+  final VoidCallback? onFirstHopChanged;
 
-  const _ProxyMenu({required this.proxyServer});
+  const _ProxyMenu({required this.proxyServer, this.onFirstHopChanged});
 
   @override
   State<StatefulWidget> createState() => _ProxyMenuState();
@@ -184,6 +202,7 @@ class _ProxyMenuState extends State<_ProxyMenu> {
 
   late Configuration configuration;
   bool changed = false;
+  bool _systemProxyTransitioning = false;
 
   AppLocalizations get localizations => AppLocalizations.of(context)!;
 
@@ -196,10 +215,14 @@ class _ProxyMenuState extends State<_ProxyMenu> {
 
   @override
   void dispose() {
-    if (configuration.proxyPassDomains != textEditingController.text) {
+    if (!widget.proxyServer.systemProxyRoutingLocked && configuration.proxyPassDomains != textEditingController.text) {
       changed = true;
       configuration.proxyPassDomains = textEditingController.text;
-      SystemProxy.setProxyPassDomains(configuration.proxyPassDomains);
+      // Passive macOS coexistence never writes system proxy state. The value
+      // is only a preference for the next explicit first-hop transaction.
+      if (!Platform.isMacOS && configuration.enableSystemProxy) {
+        SystemProxy.setProxyPassDomains(configuration.proxyPassDomains);
+      }
     }
 
     if (changed) {
@@ -233,9 +256,17 @@ class _ProxyMenuState extends State<_ProxyMenu> {
     return SubmenuButton(
       menuStyle: _menuStyle,
       menuChildren: [
-        PortWidget(proxyServer: widget.proxyServer, textStyle: const TextStyle(fontSize: 13)),
+        PortWidget(
+          proxyServer: widget.proxyServer,
+          textStyle: const TextStyle(fontSize: 13),
+          enabled: !_systemProxyTransitioning && !widget.proxyServer.systemProxyRoutingLocked,
+        ),
         const Divider(thickness: 0.3, height: 8),
         setSystemProxy(),
+        const Divider(thickness: 0.3, height: 8),
+        if (Platform.isMacOS) _firstHopProxyMode(),
+        if (Platform.isMacOS) const Divider(thickness: 0.3, height: 8),
+        _chainSystemProxy(),
         const Divider(thickness: 0.3, height: 8),
         Row(children: [
           Expanded(
@@ -276,22 +307,26 @@ class _ProxyMenuState extends State<_ProxyMenu> {
                 children: [
                   Text(localizations.proxyIgnoreDomain, style: const TextStyle(fontSize: 14)),
                   const SizedBox(height: 3),
-                  Text(isEn ? "Use ';' to separate multiple entries": "多个使用;分割", style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                  Text(isEn ? "Use ';' to separate multiple entries" : "多个使用;分割",
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
                 ],
               ),
               Padding(
                   padding: const EdgeInsets.only(left: 35),
                   child: TextButton(
+                    onPressed: widget.proxyServer.systemProxyRoutingLocked
+                        ? null
+                        : () {
+                            textEditingController.text = SystemProxy.proxyPassDomains;
+                          },
                     child: Text(localizations.reset),
-                    onPressed: () {
-                      textEditingController.text = SystemProxy.proxyPassDomains;
-                    },
                   ))
             ])),
         const SizedBox(height: 5),
         Padding(
             padding: const EdgeInsets.only(left: 15, right: 5),
             child: TextField(
+                enabled: !_systemProxyTransitioning && !widget.proxyServer.systemProxyRoutingLocked,
                 textInputAction: TextInputAction.done,
                 style: const TextStyle(fontSize: 13),
                 controller: textEditingController,
@@ -321,14 +356,128 @@ class _ProxyMenuState extends State<_ProxyMenu> {
           child: Switch(
               hoverColor: Colors.transparent,
               value: configuration.enableSystemProxy,
-              onChanged: (val) {
-                widget.proxyServer.setSystemProxyEnable(val);
-                configuration.enableSystemProxy = val;
-                setState(() {
-                  changed = true;
-                });
-              })),
+              onChanged: _systemProxyTransitioning || widget.proxyServer.isStarting
+                  ? null
+                  : (val) async {
+                      final previousValue = configuration.enableSystemProxy;
+                      setState(() {
+                        configuration.enableSystemProxy = val;
+                        _systemProxyTransitioning = true;
+                      });
+                      try {
+                        final result = await widget.proxyServer.setSystemProxyEnable(val);
+                        if (!mounted) return;
+                        setState(() {
+                          changed = true;
+                        });
+                        if (result.isOverridden) {
+                          final effective = result.effectiveProxy;
+                          final endpoint =
+                              effective == null ? localizations.other : '${effective.host}:${effective.port}';
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(localizations.systemProxyOverridden(endpoint)),
+                              duration: const Duration(seconds: 9),
+                            ),
+                          );
+                        }
+                      } catch (error) {
+                        configuration.enableSystemProxy = widget.proxyServer.systemProxyActivation.state ==
+                                SystemProxyActivationState.recoveryRequired
+                            ? true
+                            : previousValue;
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(error.toString())),
+                        );
+                      } finally {
+                        if (mounted) {
+                          setState(() {
+                            _systemProxyTransitioning = false;
+                          });
+                        }
+                      }
+                    })),
       SizedBox(width: 10)
+    ]);
+  }
+
+  Widget _firstHopProxyMode() {
+    return Row(children: [
+      Expanded(
+          child: Padding(
+              padding: const EdgeInsets.only(left: 15, right: 8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(localizations.firstHopProxyMode, style: const TextStyle(fontSize: 14)),
+                const SizedBox(height: 2),
+                Text(localizations.firstHopProxyModeDescription,
+                    style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+              ]))),
+      Transform.scale(
+          scale: 0.75,
+          child: Switch(
+              hoverColor: Colors.transparent,
+              value: widget.proxyServer.systemProxyRoutingLocked,
+              onChanged: _systemProxyTransitioning || widget.proxyServer.isStarting
+                  ? null
+                  : (val) async {
+                      setState(() {
+                        _systemProxyTransitioning = true;
+                      });
+                      try {
+                        await widget.proxyServer.setFirstHopProxyMode(val);
+                        if (!mounted) return;
+                        setState(() {
+                          changed = true;
+                        });
+                        widget.onFirstHopChanged?.call();
+                      } catch (error) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(error.toString()),
+                            duration: const Duration(seconds: 9),
+                          ),
+                        );
+                      } finally {
+                        if (mounted) {
+                          setState(() {
+                            _systemProxyTransitioning = false;
+                          });
+                          widget.onFirstHopChanged?.call();
+                        }
+                      }
+                    })),
+      const SizedBox(width: 10)
+    ]);
+  }
+
+  Widget _chainSystemProxy() {
+    return Row(children: [
+      Expanded(
+          child: Padding(
+              padding: const EdgeInsets.only(left: 15, right: 8),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(localizations.chainSystemProxy, style: const TextStyle(fontSize: 14)),
+                const SizedBox(height: 2),
+                Text(localizations.chainSystemProxyDescription,
+                    style: TextStyle(fontSize: 10, color: Colors.grey.shade600)),
+              ]))),
+      Transform.scale(
+          scale: 0.75,
+          child: Switch(
+              hoverColor: Colors.transparent,
+              value: configuration.chainSystemProxy,
+              onChanged: _systemProxyTransitioning || widget.proxyServer.systemProxyRoutingLocked
+                  ? null
+                  : (val) {
+                      setState(() {
+                        configuration.chainSystemProxy = val;
+                        widget.proxyServer.refreshRuntimeUpstream();
+                        changed = true;
+                      });
+                    })),
+      const SizedBox(width: 10)
     ]);
   }
 }

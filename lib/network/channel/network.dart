@@ -141,15 +141,21 @@ class Server extends Network {
   @override
   Future<void> onEvent(Uint8List data, ChannelContext channelContext, Channel channel) async {
     logger.d('[SSL-DEBUG] onEvent entry: channelId=${channel.id} dataLen=${data.length} '
-      'firstBytesHex=${data.length >= 8 ? data.sublist(0, 8).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ') : 'short'}');
+        'firstBytesHex=${data.length >= 8 ? data.sublist(0, 8).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ') : 'short'}');
     //手机扫码转发远程地址
     if (configuration.remoteHost != null) {
       channelContext.putAttribute(AttributeKeys.remote, HostAndPort.of(configuration.remoteHost!));
     }
 
     //外部代理信息
-    if (configuration.externalProxy?.enabled == true) {
-      ProxyInfo externalProxy = configuration.externalProxy!;
+    final effectiveExternalProxy = configuration.effectiveExternalProxy;
+    if (configuration.systemProxyLeaseLocked && effectiveExternalProxy == null) {
+      logger.e('第一跳恢复租约仍在，但没有可验证的上游；拒绝直连以避免绕过现有代理');
+      channel.close();
+      return;
+    }
+    if (effectiveExternalProxy != null) {
+      ProxyInfo externalProxy = effectiveExternalProxy;
       channelContext.putAttribute(AttributeKeys.proxyInfo, externalProxy);
 
       if (externalProxy.capturePacket == false) {
@@ -196,8 +202,8 @@ class Server extends Network {
     try {
       String? serviceName = TLS.getDomain(data) ?? hostAndPort?.host;
       logger.d('[SSL-DEBUG] ssl() resolved serviceName="$serviceName" via '
-        'TLS.getDomain=${TLS.getDomain(data) != null ? "yes" : "no"} '
-        'or hostAndPort.host=${hostAndPort?.host}');
+          'TLS.getDomain=${TLS.getDomain(data) != null ? "yes" : "no"} '
+          'or hostAndPort.host=${hostAndPort?.host}');
       bool isHttp = true;
 
       if (hostAndPort == null) {
@@ -205,7 +211,8 @@ class Server extends Network {
         var port = 443;
 
         if (domain == null) {
-          logger.d('[SSL-DEBUG] ssl() domain is null, fetching remote address by port=${channel.remoteSocketAddress.port}');
+          logger.d(
+              '[SSL-DEBUG] ssl() domain is null, fetching remote address by port=${channel.remoteSocketAddress.port}');
           var remote = await ProcessInfoPlugin.getRemoteAddressByPort(channel.remoteSocketAddress.port);
           domain = remote?.host;
           port = remote?.port ?? port;
@@ -231,9 +238,9 @@ class Server extends Network {
 
       Channel? remoteChannel = channelContext.serverChannel;
       logger.d('[SSL-DEBUG] ssl() hostAndPort=${hostAndPort.host}:${hostAndPort.port} '
-        'remoteChannel=${remoteChannel != null ? "exists isSsl=${remoteChannel.isSsl}" : "null"} '
-        'isHttp=$isHttp enableSsl=${configuration.enableSsl} '
-        'inHostFilter=${HostFilter.filter(hostAndPort.host)}');
+          'remoteChannel=${remoteChannel != null ? "exists isSsl=${remoteChannel.isSsl}" : "null"} '
+          'isHttp=$isHttp enableSsl=${configuration.enableSsl} '
+          'inHostFilter=${HostFilter.filter(hostAndPort.host)}');
       if (!isHttp || HostFilter.filter(hostAndPort.host) || !configuration.enableSsl) {
         remoteChannel = remoteChannel ?? await channelContext.connectServerChannel(hostAndPort, RelayHandler(channel));
         relay(channel, remoteChannel);
@@ -244,10 +251,10 @@ class Server extends Network {
       if (remoteChannel != null && !remoteChannel.isSsl) {
         var supportProtocols = configuration.enabledHttp2 ? TLS.supportProtocols(data) : ['http/1.1'];
         logger.d('[SSL-DEBUG] ssl() starting upstream TLS to ${hostAndPort.host}:${hostAndPort.port} '
-          'alpn=${supportProtocols}');
+            'alpn=${supportProtocols}');
         await remoteChannel.startSecureSocket(channelContext, host: serviceName, supportedProtocols: supportProtocols);
         logger.d('[SSL-DEBUG] ssl() upstream TLS connected, remoteChannel.isSsl=${remoteChannel.isSsl} '
-          'selectedProtocol=${remoteChannel.selectedProtocol}');
+            'selectedProtocol=${remoteChannel.selectedProtocol}');
       } else if (remoteChannel != null && remoteChannel.isSsl) {
         logger.d('[SSL-DEBUG] ssl() remoteChannel already SSL, selectedProtocol=${remoteChannel.selectedProtocol}');
       }
@@ -259,7 +266,7 @@ class Server extends Network {
 
       var supportedProtocols = selectedProtocol != null ? [selectedProtocol] : ['http/1.1'];
       logger.d('[SSL-DEBUG] ssl() server TLS handshake: alpn=$supportedProtocols '
-        'clientSelectedFromUpstream=${remoteChannel?.selectedProtocol}');
+          'clientSelectedFromUpstream=${remoteChannel?.selectedProtocol}');
 
       certificate.setAlpnProtocols(supportedProtocols, true);
 
@@ -267,7 +274,8 @@ class Server extends Network {
       logger.d('[SSL-DEBUG] ssl() calling SecureSocket.secureServer for client of ${hostAndPort.host}');
       var secureSocket = await SecureSocket.secureServer(channel.socket, certificate,
           bufferedData: data, supportedProtocols: supportedProtocols);
-      logger.d('[SSL-DEBUG] ssl() SecureSocket.secureServer success, serverSelectedProtocol=${secureSocket.selectedProtocol}');
+      logger.d(
+          '[SSL-DEBUG] ssl() SecureSocket.secureServer success, serverSelectedProtocol=${secureSocket.selectedProtocol}');
 
       channel.serverSecureSocket(secureSocket, channelContext);
       remoteChannel?.listen(channelContext);
@@ -284,7 +292,8 @@ class Server extends Network {
       if (error is HandshakeException && hostAndPort != null) {
         logger.d('[SSL-DEBUG] ssl() TLS MITM failed, falling back to relay for ${hostAndPort.host}');
         try {
-          final fallbackChannel = channelContext.serverChannel ?? await channelContext.connectServerChannel(hostAndPort, RelayHandler(channel));
+          final fallbackChannel = channelContext.serverChannel ??
+              await channelContext.connectServerChannel(hostAndPort, RelayHandler(channel));
           if (fallbackChannel != null) {
             relay(channel, fallbackChannel);
             channel.dispatcher.channelRead(channelContext, channel, data);

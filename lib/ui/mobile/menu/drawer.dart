@@ -283,7 +283,12 @@ class _SettingPage extends StatelessWidget {
                     onTap: () {
                       showDialog(
                           context: context,
-                          builder: (_) => ExternalProxyDialog(configuration: proxyServer.configuration));
+                          builder: (_) => ExternalProxyDialog(
+                                configuration: proxyServer.configuration,
+                                localProxyPort: proxyServer.port,
+                                onChanged: proxyServer.refreshRuntimeUpstream,
+                                routingLocked: () => proxyServer.systemProxyRoutingLocked,
+                              ));
                     }),
                 Divider(height: 0, thickness: 0.3, color: Theme.of(context).dividerColor.withValues(alpha: 0.22)),
                 Padding(

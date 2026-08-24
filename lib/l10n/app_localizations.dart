@@ -130,6 +130,12 @@ abstract class AppLocalizations {
   /// **'Requests'**
   String get requests;
 
+  /// No description provided for @localCapture.
+  ///
+  /// In en, this message translates to:
+  /// **'Local Capture'**
+  String get localCapture;
+
   /// No description provided for @favorites.
   ///
   /// In en, this message translates to:
@@ -315,6 +321,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Remote Device List'**
   String get remoteDeviceList;
+
+  /// No description provided for @allSourceDevices.
+  ///
+  /// In en, this message translates to:
+  /// **'All devices'**
+  String get allSourceDevices;
+
+  /// No description provided for @unknownSourceDevice.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown source'**
+  String get unknownSourceDevice;
+
+  /// No description provided for @allApplications.
+  ///
+  /// In en, this message translates to:
+  /// **'All apps'**
+  String get allApplications;
+
+  /// No description provided for @unknownApplication.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown app'**
+  String get unknownApplication;
 
   /// No description provided for @myQRCode.
   ///
@@ -2397,6 +2427,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Invalid port number'**
   String get mcpInvalidPort;
+
+  /// No description provided for @firstHopProxyMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Proxyman-style First Hop'**
+  String get firstHopProxyMode;
+
+  /// No description provided for @firstHopProxyModeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Requires System Proxy and may request administrator authorization on first use. It temporarily routes macOS HTTP/HTTPS through ProxyPin, restores on normal exit, and never modifies Surge; reopen ProxyPin to recover after a force quit'**
+  String get firstHopProxyModeDescription;
+
+  /// No description provided for @firstHopUpstreamLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'The upstream is locked while first-hop is active. Restore the system proxy before changing it.'**
+  String get firstHopUpstreamLocked;
+
+  /// No description provided for @chainSystemProxy.
+  ///
+  /// In en, this message translates to:
+  /// **'Use Current Proxy as Single Upstream'**
+  String get chainSystemProxy;
+
+  /// No description provided for @chainSystemProxyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Builds ProxyPin → current HTTP proxy when taking ownership; no polling and no Surge configuration changes'**
+  String get chainSystemProxyDescription;
+
+  /// No description provided for @systemProxyOverridden.
+  ///
+  /// In en, this message translates to:
+  /// **'ProxyPin identified {endpoint} as its single upstream, but that network service still owns the effective macOS route. To avoid outages and proxy loops, ProxyPin will not compete for it; only requests explicitly sent through ProxyPin will be captured.'**
+  String systemProxyOverridden(String endpoint);
+
+  /// No description provided for @externalProxyLoopError.
+  ///
+  /// In en, this message translates to:
+  /// **'The upstream proxy cannot point back to ProxyPin port {localPort}.'**
+  String externalProxyLoopError(int localPort);
 }
 
 class _AppLocalizationsDelegate extends LocalizationsDelegate<AppLocalizations> {

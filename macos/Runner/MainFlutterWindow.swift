@@ -19,6 +19,7 @@ class MainFlutterWindow: NSWindow {
         self.setFrame(windowFrame, display: true)
 
         AppLifecycleChannel.registerChannel(flutterViewController: flutterViewController)
+        SystemProxyChannel.registerChannel(flutterViewController: flutterViewController)
 
         RegisterGeneratedPlugins(registry: flutterViewController)
 

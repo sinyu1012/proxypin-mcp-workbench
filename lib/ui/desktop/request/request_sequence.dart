@@ -38,6 +38,7 @@ class RequestSequence extends StatefulWidget {
   final Function(List<HttpRequest>)? onRemove;
   final MultiSelectController selectionController;
   final RequestSelectionHandlers selectionHandlers;
+  final bool Function(HttpRequest request) requestFilter;
 
   const RequestSequence(
       {super.key,
@@ -45,6 +46,7 @@ class RequestSequence extends StatefulWidget {
       required this.proxyServer,
       this.displayDomain = true,
       this.onRemove,
+      required this.requestFilter,
       required this.selectionController,
       required this.selectionHandlers});
 
@@ -97,7 +99,7 @@ class RequestSequenceState extends State<RequestSequence> with AutomaticKeepAliv
   void initState() {
     super.initState();
     configuration = widget.proxyServer.configuration;
-    view.addAll(widget.container.source);
+    view.addAll(widget.container.where(widget.requestFilter));
 
     highlightListener = () {
       //回调时机在高亮设置页面dispose之后。所以需要在下一帧刷新，否则会报错
@@ -223,7 +225,8 @@ class RequestSequenceState extends State<RequestSequence> with AutomaticKeepAliv
   ///添加请求
   void add(HttpRequest request) {
     ///过滤
-    if (searchModel?.isNotEmpty == true && !searchModel!.filter(request, request.response)) {
+    if (!widget.requestFilter(request) ||
+        (searchModel?.isNotEmpty == true && !searchModel!.filter(request, request.response))) {
       return;
     }
 
@@ -237,7 +240,8 @@ class RequestSequenceState extends State<RequestSequence> with AutomaticKeepAliv
   void addBatch(Iterable<HttpRequest> requests) {
     var changed = false;
     for (final request in requests) {
-      if (searchModel?.isNotEmpty == true && !searchModel!.filter(request, request.response)) {
+      if (!widget.requestFilter(request) ||
+          (searchModel?.isNotEmpty == true && !searchModel!.filter(request, request.response))) {
         continue;
       }
       view.add(request);
@@ -249,6 +253,9 @@ class RequestSequenceState extends State<RequestSequence> with AutomaticKeepAliv
 
   ///添加响应
   void addResponse(HttpResponse response) {
+    if (response.request != null && !widget.requestFilter(response.request!)) {
+      return;
+    }
     if (searchModel == null || searchModel!.isEmpty || response.request == null) {
       changeState();
       return;
@@ -267,6 +274,9 @@ class RequestSequenceState extends State<RequestSequence> with AutomaticKeepAliv
   void addResponses(Iterable<HttpResponse> responses) {
     var changed = false;
     for (final response in responses) {
+      if (response.request != null && !widget.requestFilter(response.request!)) {
+        continue;
+      }
       if (searchModel == null || searchModel!.isEmpty || response.request == null) {
         changed = true;
         continue;
@@ -283,11 +293,18 @@ class RequestSequenceState extends State<RequestSequence> with AutomaticKeepAliv
   ///过滤
   void search(SearchModel searchModel) {
     this.searchModel = searchModel;
-    if (searchModel.isEmpty) {
-      view = List.of(widget.container.source);
-    } else {
-      view = widget.container.where((it) => searchModel.filter(it, it.response)).toList();
-    }
+    _rebuildFilteredView();
+  }
+
+  void applyRequestFilter() {
+    _rebuildFilteredView();
+  }
+
+  void _rebuildFilteredView() {
+    view = widget.container.where((request) {
+      if (!widget.requestFilter(request)) return false;
+      return searchModel?.isNotEmpty != true || searchModel!.filter(request, request.response);
+    }).toList();
     final visibleIds = view.map((request) => request.requestId).toSet();
     rowKeys.removeWhere((requestId, _) => !visibleIds.contains(requestId));
     selectionController.prune(view.map((request) => request.requestId));
@@ -308,7 +325,7 @@ class RequestSequenceState extends State<RequestSequence> with AutomaticKeepAliv
     setState(() {
       view.clear();
       rowKeys.clear();
-      view.addAll(widget.container.source);
+      view.addAll(widget.container.where(widget.requestFilter));
     });
   }
 

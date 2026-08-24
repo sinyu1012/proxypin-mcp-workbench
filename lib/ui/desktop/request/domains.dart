@@ -55,6 +55,8 @@ class DomainList extends StatefulWidget {
   final Function(List<HttpRequest>)? onRemove;
   final MultiSelectController selectionController;
   final RequestSelectionHandlers selectionHandlers;
+  final bool Function(HttpRequest request) requestFilter;
+  final bool Function() requestFilterActive;
 
   const DomainList(
       {super.key,
@@ -62,6 +64,8 @@ class DomainList extends StatefulWidget {
       required this.list,
       this.shrinkWrap = true,
       required this.panel,
+      required this.requestFilter,
+      required this.requestFilterActive,
       this.onRemove,
       required this.selectionController,
       required this.selectionHandlers});
@@ -143,9 +147,8 @@ class DomainWidgetState extends State<DomainList> with AutomaticKeepAliveClientM
     super.build(context);
     Iterable<DomainRequests> list = containerMap.values;
 
-    //根究搜素文本过滤
-    if (searchModel?.isNotEmpty == true) {
-      searchView = searchFilter(searchModel!);
+    if (searchModel?.isNotEmpty == true || widget.requestFilterActive()) {
+      searchView = filteredView();
       list = searchView.values;
       selectionController.prune(list.expand((e) => e.body).map((e) => e.request.requestId).toSet());
     } else {
@@ -158,6 +161,10 @@ class DomainWidgetState extends State<DomainList> with AutomaticKeepAliveClientM
         : ListView.builder(itemCount: visibleDomains.length, itemBuilder: (_, index) => visibleDomains[index]);
   }
 
+  void applyRequestFilter() {
+    if (mounted) setState(() {});
+  }
+
   ///搜索
   void search(SearchModel? val) {
     setState(() {
@@ -166,11 +173,16 @@ class DomainWidgetState extends State<DomainList> with AutomaticKeepAliveClientM
   }
 
   ///搜索过滤
-  LinkedHashMap<String, DomainRequests> searchFilter(SearchModel searchModel) {
+  LinkedHashMap<String, DomainRequests> filteredView() {
     LinkedHashMap<String, DomainRequests> result = LinkedHashMap<String, DomainRequests>();
 
     containerMap.forEach((key, domainRequests) {
-      var body = domainRequests.search(searchModel);
+      var body = domainRequests.body.where((element) {
+        final request = element.request;
+        if (!widget.requestFilter(request)) return false;
+        return searchModel?.isNotEmpty != true ||
+            searchModel!.filter(request, element.response.get() ?? request.response);
+      });
       if (body.isNotEmpty) {
         result[key] = domainRequests.copy(body: body, selected: searchView[key]?.currentSelected);
       }
@@ -274,10 +286,26 @@ class DomainWidgetState extends State<DomainList> with AutomaticKeepAliveClientM
 
   ///移除域名
   void deleteHost(String host) {
-    DomainRequests? domainRequests = containerMap.remove(host);
+    DomainRequests? domainRequests = containerMap[host];
     if (domainRequests == null) {
       return;
     }
+
+    if (widget.requestFilterActive()) {
+      final visibleRequests = domainRequests.body
+          .map((requestWidget) => requestWidget.request)
+          .where(widget.requestFilter)
+          .toList(growable: false);
+      for (final request in visibleRequests) {
+        domainRequests._removeRequest(request);
+      }
+      if (domainRequests.body.isEmpty) containerMap.remove(host);
+      if (mounted) setState(() {});
+      widget.onRemove?.call(visibleRequests);
+      return;
+    }
+
+    containerMap.remove(host);
     setState(() {});
 
     widget.onRemove?.call(domainRequests.body.map((e) => e.request).toList());
@@ -332,14 +360,14 @@ class DomainWidgetState extends State<DomainList> with AutomaticKeepAliveClientM
 
   List<HttpRequest> currentView() {
     var container = containerMap.values;
-    if (searchModel?.isNotEmpty == true) {
+    if (searchModel?.isNotEmpty == true || widget.requestFilterActive()) {
       container = searchView.values;
     }
     return container.expand((list) => list.body.map((it) => it.request)).toList();
   }
 
   Future<void> exportDomainHar(String domain) async {
-    var requests = containerMap[domain]?.body.map((it) => it.request).toList() ?? [];
+    var requests = containerMap[domain]?.body.map((it) => it.request).where(widget.requestFilter).toList() ?? [];
     if (requests.isEmpty) {
       if (mounted) FlutterToastr.show(localizations.emptyData, context);
       return;
@@ -401,7 +429,7 @@ class DomainWidgetState extends State<DomainList> with AutomaticKeepAliveClientM
 
   void _refreshRequestSelection(List<String> selectedIds) {
     var container = containerMap.values;
-    if (searchModel?.isNotEmpty == true) {
+    if (searchModel?.isNotEmpty == true || widget.requestFilterActive()) {
       container = searchView.values;
     }
     for (var domain in container) {

@@ -21,6 +21,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_toastr/flutter_toastr.dart';
 import 'package:proxypin/l10n/app_localizations.dart';
 import 'package:proxypin/native/vpn.dart';
+import 'package:proxypin/native/app_lifecycle.dart';
 import 'package:proxypin/network/bin/server.dart';
 import 'package:proxypin/network/util/logger.dart';
 import 'package:proxypin/ui/desktop/ssl/pc_cert.dart';
@@ -59,9 +60,16 @@ class SocketLaunch extends StatefulWidget {
   State<StatefulWidget> createState() => _SocketLaunchState();
 }
 
-class _SocketLaunchState extends State<SocketLaunch> with WindowListener, WidgetsBindingObserver {
+class _SocketLaunchState extends State<SocketLaunch>
+    with WindowListener, WidgetsBindingObserver
+    implements LifecycleListener {
   AppLocalizations get localizations => AppLocalizations.of(context)!;
   bool started = false;
+  bool _exiting = false;
+  Future<bool>? _terminationFuture;
+  int? _terminationRequestId;
+  bool _terminationCancelled = false;
+  bool _terminationOperationCompleted = false;
 
   @override
   void initState() {
@@ -69,7 +77,10 @@ class _SocketLaunchState extends State<SocketLaunch> with WindowListener, Widget
     if (Platforms.isDesktop()) {
       windowManager.addListener(this);
       windowManager.setPreventClose(true);
-      DesktopTrayManager.instance.setQuitHandler(appExit);
+      DesktopTrayManager.instance.setQuitHandler(() async {
+        await _requestSafeExit();
+      });
+      AppLifecycleBinding.instance.addListener(this);
     }
 
     WidgetsBinding.instance.addObserver(this);
@@ -94,6 +105,7 @@ class _SocketLaunchState extends State<SocketLaunch> with WindowListener, Widget
     WidgetsBinding.instance.removeObserver(this);
     if (Platforms.isDesktop()) {
       DesktopTrayManager.instance.setQuitHandler(null);
+      AppLifecycleBinding.instance.removeListener(this);
     }
     super.dispose();
   }
@@ -117,7 +129,7 @@ class _SocketLaunchState extends State<SocketLaunch> with WindowListener, Widget
         await appConfiguration?.flushConfig();
 
         if (!minimize) {
-          await appExit();
+          await _requestSafeExit();
           return;
         }
       }
@@ -130,7 +142,7 @@ class _SocketLaunchState extends State<SocketLaunch> with WindowListener, Widget
       }
     }
 
-    await appExit();
+    await _requestSafeExit();
   }
 
   Future<bool> _showTrayClosePrompt() async {
@@ -158,33 +170,141 @@ class _SocketLaunchState extends State<SocketLaunch> with WindowListener, Widget
   }
 
   Future<void> appExit() async {
+    if (_exiting) return;
+    _exiting = true;
+    const localTerminationRequestId = -1;
+    widget.proxyServer.beginAppTermination(localTerminationRequestId);
     logger.d("appExit");
-    await widget.proxyServer.stop();
-    started = false;
-    if (Platforms.isDesktop()) {
-      await DesktopTrayManager.instance.exitApp();
-      windowManager.setPreventClose(false);
-      await windowManager.destroy();
-    }
-
-    if (!Platform.isWindows && !Platform.isLinux) {
-      try {
-        await SystemNavigator.pop(animated: true).timeout(const Duration(milliseconds: 150));
-      } catch (_) {
-        //
+    try {
+      await widget.proxyServer.stop();
+      started = false;
+      if (Platforms.isDesktop()) {
+        await DesktopTrayManager.instance.exitApp();
+        await windowManager.setPreventClose(false);
+        await windowManager.destroy();
       }
+
+      if (!Platform.isWindows && !Platform.isLinux) {
+        try {
+          await SystemNavigator.pop(animated: true).timeout(const Duration(milliseconds: 150));
+        } catch (_) {
+          //
+        }
+      }
+
+      exit(0);
+    } catch (_) {
+      widget.proxyServer.cancelAppTermination(localTerminationRequestId);
+      _exiting = false;
+      rethrow;
+    }
+  }
+
+  Future<bool> _requestSafeExit() async {
+    try {
+      await appExit();
+      return true;
+    } catch (error, stackTrace) {
+      logger.e('安全退出已取消，ProxyPin 将继续监听', error: error, stackTrace: stackTrace);
+      if (Platforms.isDesktop()) {
+        try {
+          await DesktopTrayManager.instance.restoreWindow();
+        } catch (_) {
+          // Keep the listener alive even if restoring the window fails.
+        }
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.toString()), duration: const Duration(seconds: 9)),
+        );
+      }
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> onAppTerminateRequested(int requestId) {
+    final activeTermination = _terminationFuture;
+    if (activeTermination != null) {
+      // A native timeout can be followed by another AppKit quit request while
+      // the same idempotent stop is still running. The newest request owns the
+      // result; cancellation of an older request must not unlock Start.
+      _terminationRequestId = requestId;
+      _terminationCancelled = false;
+      widget.proxyServer.beginAppTermination(requestId);
+      return activeTermination;
     }
 
-    exit(0);
+    _terminationRequestId = requestId;
+    _terminationCancelled = false;
+    _terminationOperationCompleted = false;
+    widget.proxyServer.beginAppTermination(requestId);
+    final operation = _performAppTermination().then((safeToTerminate) {
+      _terminationOperationCompleted = true;
+      // A successful operation deliberately stays latched until AppKit exits.
+      // It is only safe to unlock when native rejected/timed out this request.
+      if (!safeToTerminate || _terminationCancelled) {
+        _resetTerminationState();
+      }
+      return safeToTerminate;
+    });
+    _terminationFuture = operation;
+    return operation;
   }
+
+  @override
+  void onAppTerminationCancelled(int requestId) {
+    if (_terminationRequestId != requestId) return;
+    _terminationCancelled = true;
+    if (_terminationOperationCompleted) {
+      _resetTerminationState();
+    }
+  }
+
+  void _resetTerminationState() {
+    final requestId = _terminationRequestId;
+    if (requestId != null) {
+      widget.proxyServer.cancelAppTermination(requestId);
+    }
+    _terminationFuture = null;
+    _terminationRequestId = null;
+    _terminationCancelled = false;
+    _terminationOperationCompleted = false;
+    _exiting = false;
+  }
+
+  Future<bool> _performAppTermination() async {
+    _exiting = true;
+    try {
+      widget.onStop?.call();
+      await widget.proxyServer.stop();
+      started = false;
+      return true;
+    } catch (error, stackTrace) {
+      logger.e('macOS 外部退出已取消，系统代理恢复未完成', error: error, stackTrace: stackTrace);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(error.toString()), duration: const Duration(seconds: 9)),
+        );
+      }
+      return false;
+    }
+  }
+
+  @override
+  void onUserLeaveHint() {}
+
+  @override
+  void onPictureInPictureModeChanged(bool isInPictureInPictureMode) {}
 
   @override
   Future<AppExitResponse> didRequestAppExit() async {
     bool isPreventClose = await windowManager.isPreventClose();
     if (!isPreventClose || Platform.isMacOS) {
-      await appExit();
+      final safeToExit = await _requestSafeExit();
+      if (!safeToExit) return AppExitResponse.cancel;
     }
-    return super.didRequestAppExit();
+    return AppExitResponse.cancel;
   }
 
   @override
@@ -241,6 +361,7 @@ class _SocketLaunchState extends State<SocketLaunch> with WindowListener, Widget
 
   ///启动代理服务器
   Future<void> start() async {
+    if (_exiting) return;
     try {
       if (!widget.serverLaunch) {
         await widget.onStart?.call();
@@ -250,16 +371,20 @@ class _SocketLaunchState extends State<SocketLaunch> with WindowListener, Widget
         return;
       }
 
-      widget.proxyServer.start().then((value) {
+      try {
+        await widget.proxyServer.start();
+        if (!mounted || _exiting) return;
         setState(() {
           started = true;
         });
-        widget.onStart?.call();
-      }).catchError((e) {
+        await widget.onStart?.call();
+      } catch (e) {
         logger.e("启动代理服务器失败", error: e);
-        String message = localizations.proxyPortRepeat(widget.proxyServer.port);
-        FlutterToastr.show(message, context, duration: 3);
-      });
+        if (mounted) {
+          final message = localizations.proxyPortRepeat(widget.proxyServer.port);
+          FlutterToastr.show(message, context, duration: 3);
+        }
+      }
     } finally {
       Future.delayed(const Duration(seconds: 5)).then((value) {
         if (!mounted) {
